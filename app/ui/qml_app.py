@@ -136,6 +136,14 @@ class AppState(QObject):
             self._selected_strategy = self._strategies[index]
             self.selectedStrategyChanged.emit()
 
+    @Slot(str)
+    def selectStrategyById(self, strategy_id: str):
+        for row in self._strategies:
+            if row.get("id") == strategy_id:
+                self._selected_strategy = row
+                self.selectedStrategyChanged.emit()
+                return
+
     @Slot()
     def copySelectedStrategy(self):
         if not self._selected_strategy:

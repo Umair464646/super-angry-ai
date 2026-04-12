@@ -31,7 +31,6 @@ Item {
                         required property var modelData
                         width: parent.width
                         row: modelData
-                        itemIndex: index
                         visible: {
                             var q = search.text.toLowerCase()
                             var passSearch = q.length === 0 || modelData.name.toLowerCase().indexOf(q) >= 0 || modelData.id.toLowerCase().indexOf(q) >= 0
@@ -39,7 +38,7 @@ Item {
                             return passSearch && passFamily
                         }
                         selected: appState.selectedStrategy && appState.selectedStrategy.id === modelData.id
-                        onClicked: function(i) { appState.selectStrategy(i) }
+                        onClicked: function() { appState.selectStrategyById(modelData.id) }
                     }
                 }
             }
