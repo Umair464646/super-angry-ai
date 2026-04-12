@@ -33,6 +33,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("Crypto Strategy Lab V9 Feature Lab")
         self.resize(1640, 980)
+        self.setMinimumSize(960, 620)
 
         self.base_df = None
         self.profile = None
@@ -369,6 +370,10 @@ class MainWindow(QMainWindow):
 def run():
     app = QApplication(sys.argv)
     app.setApplicationName("Crypto Strategy Lab V9 Feature Lab")
+    font = app.font()
+    if font.pointSize() <= 0:
+        font.setPointSize(10)
+        app.setFont(font)
     window = MainWindow()
     window.show()
     sys.exit(app.exec())

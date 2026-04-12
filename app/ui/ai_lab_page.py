@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PyQt6.QtCore import pyqtSignal, QThread
+from PyQt6.QtCore import pyqtSignal, QThread, Qt
 from PyQt6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -19,6 +19,10 @@ from PyQt6.QtWidgets import (
     QPlainTextEdit,
     QApplication,
     QFileDialog,
+    QScrollArea,
+    QSizePolicy,
+    QFrame,
+    QHeaderView,
 )
 import pyqtgraph as pg
 
@@ -126,6 +130,16 @@ class AILabPage(QWidget):
             cb.setChecked(True)
             self.feature_checks[name] = cb
             feature_row.addWidget(cb)
+        feature_row.addStretch(1)
+        feature_wrap = QWidget()
+        feature_wrap.setLayout(feature_row)
+        feature_scroll = QScrollArea()
+        feature_scroll.setWidget(feature_wrap)
+        feature_scroll.setWidgetResizable(True)
+        feature_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        feature_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        feature_scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        feature_scroll.setMinimumHeight(54)
 
         self.stage_label = QLabel("Stage: idle")
         self.stage_label.setStyleSheet("color: #8a95a5;")
@@ -165,50 +179,14 @@ class AILabPage(QWidget):
         self.evolution_plot.setLabel("left", "Fitness")
         self.evolution_plot.setLabel("bottom", "Generation")
 
-        top_split = QSplitter()
-        left = QWidget()
-        ll = QVBoxLayout(left)
-        ll.setContentsMargins(0, 0, 0, 0)
-        ll.addWidget(QLabel("Pipeline Timeline"))
-        ll.addWidget(self.timeline_table)
-        ll.addWidget(QLabel("Generation Evolution"))
-        ll.addWidget(self.generation_table)
-
-        right = QWidget()
-        rl = QVBoxLayout(right)
-        rl.setContentsMargins(0, 0, 0, 0)
-        rl.addWidget(QLabel("Current Best Strategy"))
-        rl.addWidget(self.best_strategy_card)
-        rl.addWidget(QLabel("TradingView Replication Package"))
-        rl.addWidget(self.tv_text)
-
-        top_split.addWidget(left)
-        top_split.addWidget(right)
-        top_split.setStretchFactor(0, 2)
-        top_split.setStretchFactor(1, 2)
-
-        lower_split = QSplitter()
-        left_lower = QWidget()
-        lll = QVBoxLayout(left_lower)
-        lll.setContentsMargins(0, 0, 0, 0)
-        lll.addWidget(QLabel("Regime Distribution"))
-        lll.addWidget(self.regime_table)
-        lll.addWidget(QLabel("Confidence Distribution"))
-        lll.addWidget(self.conf_table)
-        lll.addWidget(QLabel("Prediction Distribution"))
-        lll.addWidget(self.pred_table)
-
-        right_lower = QWidget()
-        rll = QVBoxLayout(right_lower)
-        rll.setContentsMargins(0, 0, 0, 0)
-        rll.addWidget(self.evolution_plot)
-        rll.addWidget(self.loss_plot)
-        rll.addWidget(self.acc_plot)
-
-        lower_split.addWidget(left_lower)
-        lower_split.addWidget(right_lower)
-        lower_split.setStretchFactor(0, 1)
-        lower_split.setStretchFactor(1, 2)
+        self.timeline_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.timeline_table.verticalHeader().setVisible(False)
+        self.timeline_table.setMinimumHeight(220)
+        self.generation_table.verticalHeader().setVisible(False)
+        self.generation_table.setMinimumHeight(220)
+        self.regime_table.verticalHeader().setVisible(False)
+        self.conf_table.verticalHeader().setVisible(False)
+        self.pred_table.verticalHeader().setVisible(False)
 
         self.lifecycle_table = QTableWidget(0, 2)
         self.lifecycle_table.setHorizontalHeaderLabels(["Stage", "Count"])
@@ -222,6 +200,9 @@ class AILabPage(QWidget):
             "Entry", "Exit", "Filters", "Fitness", "Robustness", "Validation", "Status", "TV"
         ])
         self.strategy_feed.itemSelectionChanged.connect(self._on_strategy_selected)
+        self.strategy_feed.verticalHeader().setVisible(False)
+        self.strategy_feed.setMinimumHeight(280)
+        self.strategy_feed.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         self.strategy_text = QPlainTextEdit()
         self.strategy_text.setReadOnly(True)
         self.strategy_text.setPlaceholderText("Selected Strategy Text")
@@ -240,7 +221,7 @@ class AILabPage(QWidget):
             action_row.addWidget(b)
         action_row.addStretch(1)
 
-        feed_split = QSplitter()
+        feed_split = QSplitter(Qt.Orientation.Horizontal)
         feed_left = QWidget()
         fl = QVBoxLayout(feed_left)
         fl.setContentsMargins(0, 0, 0, 0)
@@ -260,20 +241,86 @@ class AILabPage(QWidget):
         feed_split.addWidget(feed_right)
         feed_split.setStretchFactor(0, 3)
         feed_split.setStretchFactor(1, 1)
+        feed_split.setMinimumHeight(500)
+
+        evolution_panel = self._make_panel("Pipeline Timeline", self.timeline_table)
+        gen_panel = self._make_panel("Generation Evolution", self.generation_table)
+        summary_panel = self._make_panel("Pipeline Summary", self.summary)
+
+        dist_panel = QWidget()
+        dist_layout = QHBoxLayout(dist_panel)
+        dist_layout.setContentsMargins(0, 0, 0, 0)
+        dist_layout.setSpacing(12)
+        dist_layout.addWidget(self._make_panel("Regime Distribution", self.regime_table), 1)
+        dist_layout.addWidget(self._make_panel("Confidence Distribution", self.conf_table), 1)
+        dist_layout.addWidget(self._make_panel("Prediction Distribution", self.pred_table), 1)
+
+        charts_split = QSplitter(Qt.Orientation.Vertical)
+        charts_split.addWidget(self._make_panel("Best Fitness by Generation", self.evolution_plot))
+        charts_split.addWidget(self._make_panel("Model Loss", self.loss_plot))
+        charts_split.addWidget(self._make_panel("Model Accuracy", self.acc_plot))
+        charts_split.setStretchFactor(0, 2)
+        charts_split.setStretchFactor(1, 1)
+        charts_split.setStretchFactor(2, 1)
+        charts_split.setMinimumHeight(540)
+
+        strategy_details = QWidget()
+        sd = QHBoxLayout(strategy_details)
+        sd.setContentsMargins(0, 0, 0, 0)
+        sd.setSpacing(12)
+        sd.addWidget(self._make_panel("Current Best Strategy", self.best_strategy_card), 1)
+        sd.addWidget(self._make_panel("TradingView Replication Package", self.tv_text), 1)
 
         layout.addWidget(title)
         layout.addWidget(subtitle)
         layout.addLayout(control)
-        layout.addLayout(feature_row)
+        layout.addWidget(feature_scroll)
         layout.addWidget(self.stage_label)
         layout.addWidget(self.progress)
-        layout.addWidget(self.summary)
-        layout.addWidget(top_split, 2)
-        layout.addWidget(lower_split, 2)
-        layout.addWidget(feed_split, 3)
+        layout.addWidget(summary_panel)
+
+        content_host = QWidget()
+        content_layout = QVBoxLayout(content_host)
+        content_layout.setContentsMargins(6, 6, 6, 6)
+        content_layout.setSpacing(14)
+        content_layout.addWidget(evolution_panel)
+        content_layout.addWidget(gen_panel)
+        content_layout.addWidget(dist_panel)
+        content_layout.addWidget(charts_split)
+        content_layout.addWidget(strategy_details)
+        content_layout.addWidget(feed_split)
+        content_layout.addStretch(1)
+
+        content_scroll = QScrollArea()
+        content_scroll.setWidgetResizable(True)
+        content_scroll.setWidget(content_host)
+        content_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        content_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        layout.addWidget(content_scroll, 1)
 
         self._set_buttons_running(False)
         self._refresh_summary()
+
+    def _make_panel(self, title: str, child: QWidget) -> QWidget:
+        frame = QFrame()
+        frame.setObjectName("AIPanelCard")
+        frame.setStyleSheet(
+            """
+            QFrame#AIPanelCard {
+                background: #0b111a;
+                border: 1px solid #1d2a3b;
+                border-radius: 10px;
+            }
+            """
+        )
+        lay = QVBoxLayout(frame)
+        lay.setContentsMargins(10, 10, 10, 10)
+        lay.setSpacing(8)
+        head = QLabel(title)
+        head.setStyleSheet("font-size:14px; font-weight:700; color:#d6eaff;")
+        lay.addWidget(head)
+        lay.addWidget(child)
+        return frame
 
     def _selected_features(self):
         return [name for name, cb in self.feature_checks.items() if cb.isChecked()]
