@@ -14,6 +14,7 @@ from app.core.ai_engine import analyze_market_ai
 from app.core.data_loader import load_market_file_minimal
 from app.core.feature_engine import generate_features
 from app.core.strategy_engine import evolve_templates, walk_forward_validate
+from app.core.chart_adapter import build_candle_payload
 
 
 class ResearchWorker(QObject):
@@ -184,6 +185,8 @@ class AppState(QObject):
     regimeCountsChanged = Signal()
     featureImportanceChanged = Signal()
     profileChanged = Signal()
+    chartCandlesChanged = Signal()
+    chartTimeframeChanged = Signal()
 
     def __init__(self) -> None:
         super().__init__()
@@ -202,6 +205,8 @@ class AppState(QObject):
         self._stage_text = "Idle"
         self._profile: dict = {}
         self._base_df: pd.DataFrame | None = None
+        self._chart_timeframe = "1s"
+        self._chart_candles: list[dict] = []
 
         self._thread: QThread | None = None
         self._worker: ResearchWorker | None = None
@@ -263,6 +268,15 @@ class AppState(QObject):
     def stageText(self):
         return self._stage_text
 
+
+    @Property(str, notify=chartTimeframeChanged)
+    def chartTimeframe(self):
+        return self._chart_timeframe
+
+    @Property("QVariantList", notify=chartCandlesChanged)
+    def chartCandles(self):
+        return self._chart_candles
+
     @Slot(str)
     def setDatasetPath(self, dataset_path: str):
         self._dataset_path = dataset_path.strip()
@@ -278,11 +292,27 @@ class AppState(QObject):
             self._base_df = df
             self._profile = asdict(profile)
             self.profileChanged.emit()
+            self._refresh_chart_data()
             self._set_stage("Dataset loaded")
             self._append_log("INFO", f"Dataset loaded: rows={profile.rows:,} cols={len(profile.columns)}")
             self._append_log("INFO", f"Range: {profile.start} -> {profile.end}")
         except Exception as exc:
             self._append_log("ERROR", f"Dataset load failed: {exc}")
+
+
+    @Slot(str)
+    def setChartTimeframe(self, timeframe: str):
+        tf = timeframe if timeframe in {"1s", "1m"} else "1s"
+        self._chart_timeframe = tf
+        self.chartTimeframeChanged.emit()
+        self._refresh_chart_data()
+
+    def _refresh_chart_data(self):
+        if self._base_df is None:
+            self._chart_candles = []
+        else:
+            self._chart_candles = build_candle_payload(self._base_df, timeframe=self._chart_timeframe, window=280)
+        self.chartCandlesChanged.emit()
 
     @Slot()
     def startResearch(self):
