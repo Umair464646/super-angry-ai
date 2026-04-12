@@ -152,6 +152,152 @@ FEATURE_BUILDERS = {
     "CANDLE_RATIOS": add_candle_ratio_features,
 }
 
+
+def add_vwap_features(df: pd.DataFrame) -> list[str]:
+    if "vwap" in df.columns and df["vwap"].notna().any():
+        vwap = df["vwap"]
+    elif "quote_volume" in df.columns:
+        vwap = (df["quote_volume"].fillna(0).cumsum() / df["volume"].replace(0, np.nan).cumsum()).ffill()
+    else:
+        tp = (df["high"] + df["low"] + df["close"]) / 3.0
+        vwap = ((tp * df["volume"].fillna(0)).cumsum() / df["volume"].replace(0, np.nan).cumsum()).ffill()
+    df["vwap_auto"] = vwap
+    df["close_to_vwap"] = (df["close"] - vwap) / vwap.replace(0, np.nan)
+    return ["vwap_auto", "close_to_vwap"]
+
+
+def add_momentum_features(df: pd.DataFrame) -> list[str]:
+    df["mom_3"] = df["close"].pct_change(3)
+    df["mom_10"] = df["close"].pct_change(10)
+    df["roc_20"] = ((df["close"] / df["close"].shift(20)) - 1.0) * 100.0
+    return ["mom_3", "mom_10", "roc_20"]
+
+
+def add_orderflow_features(df: pd.DataFrame) -> list[str]:
+    cols = []
+    if "buy_volume" in df.columns and "sell_volume" in df.columns:
+        total = (df["buy_volume"] + df["sell_volume"]).replace(0, np.nan)
+        df["buy_sell_imbalance_of"] = (df["buy_volume"] - df["sell_volume"]) / total
+        cols.append("buy_sell_imbalance_of")
+    if "buy_sell_vol_delta" in df.columns:
+        df["buy_sell_vol_delta_z"] = (
+            (df["buy_sell_vol_delta"] - df["buy_sell_vol_delta"].rolling(100).mean()) /
+            df["buy_sell_vol_delta"].rolling(100).std().replace(0, np.nan)
+        )
+        cols.append("buy_sell_vol_delta_z")
+    return cols
+
+
+def add_zscore_features(df: pd.DataFrame) -> list[str]:
+    ma = df["close"].rolling(50).mean()
+    sd = df["close"].rolling(50).std().replace(0, np.nan)
+    df["close_z_50"] = (df["close"] - ma) / sd
+    vma = df["volume"].rolling(50).mean()
+    vsd = df["volume"].rolling(50).std().replace(0, np.nan)
+    df["volume_z_50"] = (df["volume"] - vma) / vsd
+    return ["close_z_50", "volume_z_50"]
+
+
+def add_donchian_features(df: pd.DataFrame) -> list[str]:
+    df["donchian_high_20"] = df["high"].rolling(20).max()
+    df["donchian_low_20"] = df["low"].rolling(20).min()
+    df["donchian_mid_20"] = (df["donchian_high_20"] + df["donchian_low_20"]) / 2.0
+    return ["donchian_high_20", "donchian_low_20", "donchian_mid_20"]
+
+
+def add_stochastic_features(df: pd.DataFrame) -> list[str]:
+    low14 = df["low"].rolling(14).min()
+    high14 = df["high"].rolling(14).max()
+    k = ((df["close"] - low14) / (high14 - low14).replace(0, np.nan)) * 100.0
+    d = k.rolling(3).mean()
+    df["stoch_k_14"] = k
+    df["stoch_d_3"] = d
+    return ["stoch_k_14", "stoch_d_3"]
+
+
+def add_keltner_features(df: pd.DataFrame) -> list[str]:
+    ema20 = df["close"].ewm(span=20, adjust=False).mean()
+    tr, atr = compute_atr(df["high"], df["low"], df["close"], 20)
+    df["keltner_mid_20"] = ema20
+    df["keltner_upper_20"] = ema20 + 2.0 * atr
+    df["keltner_lower_20"] = ema20 - 2.0 * atr
+    return ["keltner_mid_20", "keltner_upper_20", "keltner_lower_20"]
+
+
+def add_adx_features(df: pd.DataFrame) -> list[str]:
+    high, low, close = df["high"], df["low"], df["close"]
+    plus_dm = (high.diff()).clip(lower=0)
+    minus_dm = (-low.diff()).clip(lower=0)
+    plus_dm[plus_dm < minus_dm] = 0
+    minus_dm[minus_dm < plus_dm] = 0
+    tr, atr = compute_atr(high, low, close, 14)
+    plus_di = 100 * (plus_dm.ewm(alpha=1/14, adjust=False).mean() / atr.replace(0, np.nan))
+    minus_di = 100 * (minus_dm.ewm(alpha=1/14, adjust=False).mean() / atr.replace(0, np.nan))
+    dx = (100 * (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, np.nan))
+    adx = dx.ewm(alpha=1/14, adjust=False).mean()
+    df["plus_di_14"] = plus_di
+    df["minus_di_14"] = minus_di
+    df["adx_14"] = adx
+    return ["plus_di_14", "minus_di_14", "adx_14"]
+
+
+def add_cci_features(df: pd.DataFrame) -> list[str]:
+    tp = (df["high"] + df["low"] + df["close"]) / 3.0
+    ma = tp.rolling(20).mean()
+    md = (tp - ma).abs().rolling(20).mean().replace(0, np.nan)
+    df["cci_20"] = (tp - ma) / (0.015 * md)
+    return ["cci_20"]
+
+
+def add_williams_r_features(df: pd.DataFrame) -> list[str]:
+    hh = df["high"].rolling(14).max()
+    ll = df["low"].rolling(14).min()
+    df["williams_r_14"] = -100 * ((hh - df["close"]) / (hh - ll).replace(0, np.nan))
+    return ["williams_r_14"]
+
+
+def add_obv_features(df: pd.DataFrame) -> list[str]:
+    direction = np.sign(df["close"].diff().fillna(0))
+    df["obv"] = (direction * df["volume"]).cumsum()
+    df["obv_ema_20"] = df["obv"].ewm(span=20, adjust=False).mean()
+    return ["obv", "obv_ema_20"]
+
+
+def add_cmf_features(df: pd.DataFrame) -> list[str]:
+    mfm = ((df["close"] - df["low"]) - (df["high"] - df["close"])) / (df["high"] - df["low"]).replace(0, np.nan)
+    mfv = mfm * df["volume"]
+    df["cmf_20"] = mfv.rolling(20).sum() / df["volume"].rolling(20).sum().replace(0, np.nan)
+    return ["cmf_20"]
+
+
+def add_ichimoku_features(df: pd.DataFrame) -> list[str]:
+    conv = (df["high"].rolling(9).max() + df["low"].rolling(9).min()) / 2.0
+    base = (df["high"].rolling(26).max() + df["low"].rolling(26).min()) / 2.0
+    span_a = ((conv + base) / 2.0).shift(26)
+    span_b = ((df["high"].rolling(52).max() + df["low"].rolling(52).min()) / 2.0).shift(26)
+    df["ichimoku_conv_9"] = conv
+    df["ichimoku_base_26"] = base
+    df["ichimoku_span_a"] = span_a
+    df["ichimoku_span_b"] = span_b
+    return ["ichimoku_conv_9", "ichimoku_base_26", "ichimoku_span_a", "ichimoku_span_b"]
+
+
+FEATURE_BUILDERS.update({
+    "VWAP": add_vwap_features,
+    "MOMENTUM": add_momentum_features,
+    "ORDER_FLOW": add_orderflow_features,
+    "ZSCORE": add_zscore_features,
+    "DONCHIAN": add_donchian_features,
+    "STOCHASTIC": add_stochastic_features,
+    "KELTNER": add_keltner_features,
+    "ADX": add_adx_features,
+    "CCI": add_cci_features,
+    "WILLIAMS_R": add_williams_r_features,
+    "OBV": add_obv_features,
+    "CMF": add_cmf_features,
+    "ICHIMOKU": add_ichimoku_features,
+})
+
 def generate_features(df: pd.DataFrame, selected_features: list[str]):
     out = ensure_sorted(df.copy())
     generated_cols: list[str] = []
