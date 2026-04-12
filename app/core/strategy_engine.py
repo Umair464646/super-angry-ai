@@ -57,6 +57,23 @@ TEMPLATES: list[StrategyTemplate] = [
         exit_logic="Exit via stop-loss, take-profit, or end of data in current phase.",
         filters="Ignore synthetic rows and require valid VWAP values.",
     ),
+    StrategyTemplate(
+        key="multi_factor_combo",
+        name="Multi-Factor Combo",
+        indicators=["EMA", "RSI", "MACD", "ADX", "VWAP", "Volume Spike"],
+        params={
+            "ema_fast": 20,
+            "ema_slow": 50,
+            "rsi_len": 14,
+            "rsi_long_min": 52,
+            "rsi_short_max": 48,
+            "adx_min": 18,
+            "vol_spike_mult": 1.2,
+        },
+        entry_logic="Long when trend+momentum+volume align (EMA/MACD/RSI/ADX/VWAP). Short on inverse alignment.",
+        exit_logic="Exit via SL/TP/end-of-data in current phase.",
+        filters="Synthetic rows do not trigger entries.",
+    ),
 ]
 
 
@@ -158,6 +175,68 @@ def build_strategy_dataframe(df: pd.DataFrame, template_key: str, params: dict[s
             (local["close"] < local["ema_n"]) &
             local["volume_spike"]
         )
+
+    elif template_key == "multi_factor_combo":
+        ema_fast = int(p.get("ema_fast", 20))
+        ema_slow = int(p.get("ema_slow", 50))
+        rsi_len = int(p.get("rsi_len", 14))
+        rsi_long_min = float(p.get("rsi_long_min", 52))
+        rsi_short_max = float(p.get("rsi_short_max", 48))
+        adx_min = float(p.get("adx_min", 18))
+        vol_spike_mult = float(p.get("vol_spike_mult", 1.2))
+
+        if ema_fast <= 1 or ema_slow <= 2 or ema_fast >= ema_slow:
+            raise ValueError("multi_factor_combo EMA parameters invalid")
+
+        local = _ensure_vwap(local)
+        local["ema_fast"] = local["close"].ewm(span=ema_fast, adjust=False).mean()
+        local["ema_slow"] = local["close"].ewm(span=ema_slow, adjust=False).mean()
+
+        delta = local["close"].diff()
+        gain = delta.clip(lower=0)
+        loss = -delta.clip(upper=0)
+        avg_gain = gain.rolling(rsi_len).mean()
+        avg_loss = loss.rolling(rsi_len).mean().replace(0, pd.NA)
+        rs = avg_gain / avg_loss
+        local["rsi"] = 100 - (100 / (1 + rs))
+
+        macd_fast = local["close"].ewm(span=12, adjust=False).mean()
+        macd_slow = local["close"].ewm(span=26, adjust=False).mean()
+        local["macd_line"] = macd_fast - macd_slow
+        local["macd_signal"] = local["macd_line"].ewm(span=9, adjust=False).mean()
+        local["macd_hist"] = local["macd_line"] - local["macd_signal"]
+
+        plus_dm = (local["high"].diff()).clip(lower=0)
+        minus_dm = (-local["low"].diff()).clip(lower=0)
+        plus_dm[plus_dm < minus_dm] = 0
+        minus_dm[minus_dm < plus_dm] = 0
+        tr = pd.concat(
+            [
+                (local["high"] - local["low"]),
+                (local["high"] - local["close"].shift(1)).abs(),
+                (local["low"] - local["close"].shift(1)).abs(),
+            ],
+            axis=1,
+        ).max(axis=1)
+        atr = tr.ewm(alpha=1 / 14, adjust=False).mean().replace(0, pd.NA)
+        plus_di = 100 * (plus_dm.ewm(alpha=1 / 14, adjust=False).mean() / atr)
+        minus_di = 100 * (minus_dm.ewm(alpha=1 / 14, adjust=False).mean() / atr)
+        dx = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, pd.NA)
+        local["adx_14"] = dx.ewm(alpha=1 / 14, adjust=False).mean()
+
+        vol_ma = local["volume"].rolling(50).mean()
+        local["volume_spike"] = local["volume"] > (vol_ma * vol_spike_mult)
+
+        trend_up = local["ema_fast"] > local["ema_slow"]
+        trend_dn = local["ema_fast"] < local["ema_slow"]
+        momentum_up = local["macd_hist"] > 0
+        momentum_dn = local["macd_hist"] < 0
+        vwap_up = local["close"] > local["vwap"]
+        vwap_dn = local["close"] < local["vwap"]
+        strong = local["adx_14"] >= adx_min
+
+        local["long_entry"] = trend_up & momentum_up & (local["rsi"] >= rsi_long_min) & strong & vwap_up & local["volume_spike"]
+        local["short_entry"] = trend_dn & momentum_dn & (local["rsi"] <= rsi_short_max) & strong & vwap_dn & local["volume_spike"]
 
     else:
         raise ValueError(f"Unsupported template: {template_key}")
@@ -292,6 +371,26 @@ def _variant_param_grid(template_key: str, base_params: dict[str, Any]) -> list[
         for ema_len in [21, 34, 55]:
             for vsm in [1.2, 1.5, 2.0]:
                 variants.append({"ema_len": ema_len, "vol_spike_mult": vsm})
+    elif template_key == "multi_factor_combo":
+        for ema_fast in [12, 20]:
+            for ema_slow in [34, 50, 80]:
+                if ema_fast >= ema_slow:
+                    continue
+                for rsi_len in [10, 14]:
+                    for rsi_long_min, rsi_short_max in [(55, 45), (52, 48)]:
+                        for adx_min in [16, 20, 24]:
+                            for vsm in [1.1, 1.3]:
+                                variants.append(
+                                    {
+                                        "ema_fast": ema_fast,
+                                        "ema_slow": ema_slow,
+                                        "rsi_len": rsi_len,
+                                        "rsi_long_min": rsi_long_min,
+                                        "rsi_short_max": rsi_short_max,
+                                        "adx_min": adx_min,
+                                        "vol_spike_mult": vsm,
+                                    }
+                                )
     else:
         variants.append(base_params)
     return variants or [base_params]

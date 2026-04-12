@@ -36,6 +36,7 @@ Also check the timeline table and log panel for active stage updates.
 - **Stop**: graceful cancel request
 - **AI-Only Quick Run**: only regime/confidence model analysis
 - **Open Live Monitor**: opens a dedicated real-time run window showing candidate test progress, generation evolution, and live engine logs
+- **Neural Network Window**: opens automatically on run and displays architecture + live epoch loss/accuracy curves
 
 Settings:
 - **Timeframe**: dataset slice resolution used for run

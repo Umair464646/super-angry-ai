@@ -11,10 +11,12 @@ class AIWorker(QObject):
     log = pyqtSignal(str, str)
     finished = pyqtSignal(object)
     error = pyqtSignal(str)
+    epoch = pyqtSignal(int, int, float, float)
 
-    def __init__(self, df):
+    def __init__(self, df, model_type: str = "mlp"):
         super().__init__()
         self.df = df
+        self.model_type = model_type
 
     @pyqtSlot()
     def run(self):
@@ -29,7 +31,11 @@ class AIWorker(QObject):
             self.progress.emit(35)
 
             self.stage.emit("Training setup scoring model")
-            result = analyze_market_ai(self.df)
+            result = analyze_market_ai(
+                self.df,
+                model_type=self.model_type,
+                epoch_cb=lambda e, total, loss, acc: self.epoch.emit(e, total, loss, acc),
+            )
 
             self.progress.emit(90)
             self.stage.emit("Finalizing AI outputs")

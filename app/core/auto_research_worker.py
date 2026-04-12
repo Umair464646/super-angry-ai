@@ -28,6 +28,7 @@ class AutoResearchWorker(QObject):
     timeline = pyqtSignal(str, int, str)  # stage_name, percent, note
     generation = pyqtSignal(int, int, float, int)  # gen, survivors, best_fitness, population
     candidate_test = pyqtSignal(int, int, int, str)  # gen, done, total, family
+    ai_epoch = pyqtSignal(int, int, float, float)
     finished = pyqtSignal(object)
     error = pyqtSignal(str)
 
@@ -168,7 +169,11 @@ class AutoResearchWorker(QObject):
                     "WARN",
                     f"AI input downsampled for speed: {len(featured_df):,} -> {len(ai_df):,} rows (stride {stride})",
                 )
-            ai_result = analyze_market_ai(ai_df)
+            ai_result = analyze_market_ai(
+                ai_df,
+                model_type="mlp",
+                epoch_cb=lambda e, total, loss, acc: self.ai_epoch.emit(e, total, loss, acc),
+            )
             self.timeline.emit("AI analysis", 100, "AI outputs ready")
 
             self.stage.emit("Step J: Final ranking and export package")

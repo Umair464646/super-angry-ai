@@ -26,6 +26,7 @@ class AIAnalysisResult:
     loss_curve: list[float]
     accuracy_curve: list[float]
     model_notes: str
+    nn_architecture: str
 
 
 def _require_columns(df: pd.DataFrame, cols: list[str]) -> None:
@@ -98,7 +99,13 @@ def _classify_regimes(df: pd.DataFrame) -> pd.Series:
     return regime
 
 
-def _train_setup_model(df: pd.DataFrame, epochs: int = 24, lr: float = 0.08):
+def _train_setup_model(
+    df: pd.DataFrame,
+    epochs: int = 24,
+    lr: float = 0.08,
+    model_type: str = "mlp",
+    epoch_cb=None,
+):
     feature_cols = [
         "ret_1",
         "log_ret_1",
@@ -120,41 +127,85 @@ def _train_setup_model(df: pd.DataFrame, epochs: int = 24, lr: float = 0.08):
     Xn = (X - mean) / std
 
     n, m = Xn.shape
-    w = np.zeros(m)
-    b = 0.0
     losses: list[float] = []
     accuracies: list[float] = []
 
-    for _ in range(epochs):
-        logits = Xn @ w + b
-        p = _sigmoid(logits)
+    if model_type == "logistic":
+        w = np.zeros(m)
+        b = 0.0
+        for epoch in range(epochs):
+            logits = Xn @ w + b
+            p = _sigmoid(logits)
 
-        eps = 1e-9
-        loss = -np.mean(y * np.log(p + eps) + (1 - y) * np.log(1 - p + eps))
-        preds = (p >= 0.5).astype(float)
-        acc = float((preds == y).mean())
+            eps = 1e-9
+            loss = -np.mean(y * np.log(p + eps) + (1 - y) * np.log(1 - p + eps))
+            preds = (p >= 0.5).astype(float)
+            acc = float((preds == y).mean())
 
-        grad_w = (Xn.T @ (p - y)) / n
-        grad_b = float(np.mean(p - y))
+            grad_w = (Xn.T @ (p - y)) / n
+            grad_b = float(np.mean(p - y))
 
-        w -= lr * grad_w
-        b -= lr * grad_b
+            w -= lr * grad_w
+            b -= lr * grad_b
+            losses.append(float(loss))
+            accuracies.append(acc)
+            if epoch_cb is not None:
+                epoch_cb(epoch + 1, epochs, float(loss), acc)
 
-        losses.append(float(loss))
-        accuracies.append(acc)
+        probs = _sigmoid(Xn @ w + b)
+        arch = f"Input({m}) -> Logistic(1)"
+    else:
+        hidden = max(8, min(24, m * 2))
+        rng = np.random.default_rng(42)
+        w1 = rng.normal(0, 0.1, size=(m, hidden))
+        b1 = np.zeros(hidden)
+        w2 = rng.normal(0, 0.1, size=(hidden, 1))
+        b2 = np.zeros(1)
+        for epoch in range(epochs):
+            z1 = Xn @ w1 + b1
+            a1 = np.tanh(z1)
+            z2 = a1 @ w2 + b2
+            p = _sigmoid(z2.reshape(-1))
 
-    probs = _sigmoid(Xn @ w + b)
+            eps = 1e-9
+            loss = -np.mean(y * np.log(p + eps) + (1 - y) * np.log(1 - p + eps))
+            preds = (p >= 0.5).astype(float)
+            acc = float((preds == y).mean())
+
+            dz2 = (p - y).reshape(-1, 1) / n
+            dw2 = a1.T @ dz2
+            db2 = dz2.sum(axis=0)
+            da1 = dz2 @ w2.T
+            dz1 = da1 * (1 - np.tanh(z1) ** 2)
+            dw1 = Xn.T @ dz1
+            db1 = dz1.sum(axis=0)
+
+            w2 -= lr * dw2
+            b2 -= lr * db2
+            w1 -= lr * dw1
+            b1 -= lr * db1
+
+            losses.append(float(loss))
+            accuracies.append(acc)
+            if epoch_cb is not None:
+                epoch_cb(epoch + 1, epochs, float(loss), acc)
+
+        probs = _sigmoid((np.tanh(Xn @ w1 + b1) @ w2 + b2).reshape(-1))
+        arch = f"Input({m}) -> Dense({hidden}, tanh) -> Dense(1, sigmoid)"
+
     confidence = np.clip(np.abs(probs - 0.5) * 2.0, 0.0, 1.0)
 
-    return probs, confidence, losses, accuracies
+    return probs, confidence, losses, accuracies, arch
 
 
-def analyze_market_ai(df: pd.DataFrame) -> AIAnalysisResult:
+def analyze_market_ai(df: pd.DataFrame, model_type: str = "mlp", epoch_cb=None) -> AIAnalysisResult:
     _require_columns(df, ["timestamp", "open", "high", "low", "close", "volume"])
 
     local = _build_features(df)
     local["regime"] = _classify_regimes(local)
-    probs, confidence, losses, accuracies = _train_setup_model(local)
+    probs, confidence, losses, accuracies, arch = _train_setup_model(
+        local, model_type=model_type, epoch_cb=epoch_cb
+    )
 
     local["setup_probability"] = probs
     local["setup_confidence"] = confidence
@@ -214,8 +265,9 @@ def analyze_market_ai(df: pd.DataFrame) -> AIAnalysisResult:
         loss_curve=losses,
         accuracy_curve=accuracies,
         model_notes=(
-            "Setup model: logistic classifier on engineered OHLCV features.\\n"
+            f"Setup model type: {model_type}.\\n"
             "Inputs: ret_1, log_ret_1, vol_30, trend_strength, compression_ratio, volume_z, synthetic.\\n"
             "Objective: predict next-bar direction probability with transparent confidence."
         ),
+        nn_architecture=arch,
     )

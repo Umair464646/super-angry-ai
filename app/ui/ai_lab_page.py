@@ -23,6 +23,7 @@ import pyqtgraph as pg
 from app.core.ai_worker import AIWorker
 from app.core.auto_research_worker import AutoResearchWorker, ResearchRunConfig
 from app.ui.ai_live_monitor import AILiveMonitorDialog
+from app.ui.nn_training_window import NNTrainingWindow
 
 
 FEATURE_GROUPS = [
@@ -50,6 +51,7 @@ class AILabPage(QWidget):
         self.ai_result = None
         self.pipeline_result = None
         self.live_monitor = None
+        self.nn_window = None
         self._build_ui()
 
     def _build_ui(self):
@@ -79,6 +81,8 @@ class AILabPage(QWidget):
 
         self.auto_mode = QCheckBox("Auto mode")
         self.auto_mode.setChecked(True)
+        self.model_box = QComboBox()
+        self.model_box.addItems(["mlp", "logistic"])
 
         self.start_btn = QPushButton("Start")
         self.start_btn.clicked.connect(self.start_pipeline)
@@ -97,6 +101,8 @@ class AILabPage(QWidget):
         control.addWidget(self.population_spin)
         control.addWidget(QLabel("Generations"))
         control.addWidget(self.generation_spin)
+        control.addWidget(QLabel("Model"))
+        control.addWidget(self.model_box)
         control.addWidget(self.auto_mode)
         control.addWidget(self.start_btn)
         control.addWidget(self.pause_btn)
@@ -267,6 +273,13 @@ class AILabPage(QWidget):
         self.live_monitor.raise_()
         self.live_monitor.activateWindow()
 
+    def open_nn_window(self):
+        if self.nn_window is None:
+            self.nn_window = NNTrainingWindow(self)
+        self.nn_window.show()
+        self.nn_window.raise_()
+        self.nn_window.activateWindow()
+
     def start_pipeline(self):
         tf = self.timeframe_box.currentText()
         df = self.timeframe_cache.get(tf)
@@ -286,6 +299,7 @@ class AILabPage(QWidget):
         self._set_buttons_running(True)
         self.stage_label.setText("Stage: starting automated pipeline")
         self.open_live_monitor()
+        self.open_nn_window()
 
         config = ResearchRunConfig(
             selected_features=selected,
@@ -305,6 +319,7 @@ class AILabPage(QWidget):
         self.pipeline_worker.timeline.connect(self._on_timeline)
         self.pipeline_worker.generation.connect(self._on_generation)
         self.pipeline_worker.candidate_test.connect(self._on_candidate_progress)
+        self.pipeline_worker.ai_epoch.connect(self._on_ai_epoch)
         self.pipeline_worker.finished.connect(self._on_pipeline_finished)
         self.pipeline_worker.error.connect(self._on_pipeline_error)
 
@@ -347,7 +362,8 @@ class AILabPage(QWidget):
 
         self._set_buttons_running(True)
         self.ai_thread = QThread()
-        self.ai_worker = AIWorker(df)
+        self.open_nn_window()
+        self.ai_worker = AIWorker(df, model_type=self.model_box.currentText())
         self.ai_worker.moveToThread(self.ai_thread)
 
         self.ai_thread.started.connect(self.ai_worker.run)
@@ -356,6 +372,7 @@ class AILabPage(QWidget):
         self.ai_worker.log.connect(self.log_message.emit)
         self.ai_worker.finished.connect(self._on_ai_only_ready)
         self.ai_worker.error.connect(self._on_pipeline_error)
+        self.ai_worker.epoch.connect(self._on_ai_epoch)
 
         self.ai_worker.finished.connect(self.ai_thread.quit)
         self.ai_worker.error.connect(self.ai_thread.quit)
@@ -441,6 +458,9 @@ class AILabPage(QWidget):
             ])
         )
         self.tv_text.setPlainText(payload["tradingview_text"])
+        if self.nn_window is not None:
+            self.nn_window.set_architecture(payload["ai"].nn_architecture)
+            self.nn_window.on_finished()
 
         self._refresh_summary()
         self.log_message.emit("INFO", "Automated research pipeline complete")
@@ -458,6 +478,13 @@ class AILabPage(QWidget):
         self.acc_plot.clear()
         self.loss_plot.plot(list(range(1, len(result.loss_curve) + 1)), result.loss_curve, pen=pg.mkPen("#ff6b6b", width=2))
         self.acc_plot.plot(list(range(1, len(result.accuracy_curve) + 1)), result.accuracy_curve, pen=pg.mkPen("#00d4ff", width=2))
+        if self.nn_window is not None:
+            self.nn_window.set_architecture(result.nn_architecture)
+            self.nn_window.on_finished()
+
+    def _on_ai_epoch(self, epoch: int, total: int, loss: float, acc: float):
+        if self.nn_window is not None:
+            self.nn_window.on_epoch(epoch, total, loss, acc)
 
     def _on_pipeline_error(self, text: str):
         self._set_buttons_running(False)
