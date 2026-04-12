@@ -6,6 +6,8 @@ Item {
     Layout.fillWidth: true
     Layout.fillHeight: true
 
+    property real lastX: 0
+
     ColumnLayout {
         anchors.fill: parent
         anchors.margins: 10
@@ -17,9 +19,17 @@ Item {
             Item { Layout.fillWidth: true }
             ComboBox {
                 id: tf
-                model: ["1s", "1m"]
-                currentIndex: appState.chartTimeframe === "1m" ? 1 : 0
+                model: ["1s", "1m", "5m", "15m"]
+                currentIndex: Math.max(0, model.indexOf(appState.chartTimeframe))
                 onActivated: appState.setChartTimeframe(currentText)
+            }
+            Button { text: "◀"; onClicked: appState.panChart(-Math.max(10, appState.chartWindowSize/5)) }
+            Button { text: "▶"; onClicked: appState.panChart(Math.max(10, appState.chartWindowSize/5)) }
+            Button { text: "-"; onClicked: appState.zoomChart(-1) }
+            Button { text: "+"; onClicked: appState.zoomChart(1) }
+            Label {
+                text: "Window: " + appState.chartWindowSize + " candles"
+                color: "#9BB6D8"
             }
         }
 
@@ -70,13 +80,11 @@ Item {
                         ctx.fillStyle = up ? "#3ED2A3" : "#F27D7D"
                         ctx.lineWidth = 1
 
-                        // wick
                         ctx.beginPath()
                         ctx.moveTo(x, yH)
                         ctx.lineTo(x, yL)
                         ctx.stroke()
 
-                        // body
                         var top = Math.min(yO, yC)
                         var h = Math.max(1, Math.abs(yC - yO))
                         ctx.fillRect(x - cw * 0.32, top, cw * 0.64, h)
@@ -88,6 +96,26 @@ Item {
                     function onChartCandlesChanged() { candleCanvas.requestPaint() }
                 }
                 Component.onCompleted: requestPaint()
+            }
+
+            MouseArea {
+                anchors.fill: parent
+                acceptedButtons: Qt.LeftButton
+                hoverEnabled: true
+                onPressed: root.lastX = mouse.x
+                onPositionChanged: {
+                    if (!(mouse.buttons & Qt.LeftButton)) return
+                    var dx = mouse.x - root.lastX
+                    if (Math.abs(dx) > 10) {
+                        var step = Math.round(dx / 10)
+                        appState.panChart(-step)
+                        root.lastX = mouse.x
+                    }
+                }
+                onWheel: function(wheel) {
+                    if (wheel.angleDelta.y > 0) appState.zoomChart(1)
+                    else appState.zoomChart(-1)
+                }
             }
         }
     }

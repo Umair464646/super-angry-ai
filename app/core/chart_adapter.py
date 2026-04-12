@@ -4,9 +4,15 @@ import pandas as pd
 
 
 REQUIRED = ["timestamp", "open", "high", "low", "close"]
+TIMEFRAME_MAP = {
+    "1s": None,
+    "1m": "1min",
+    "5m": "5min",
+    "15m": "15min",
+}
 
 
-def build_candle_payload(df: pd.DataFrame, timeframe: str = "1s", window: int = 300) -> list[dict]:
+def build_candle_payload(df: pd.DataFrame, timeframe: str = "1s", window: int | None = 300) -> list[dict]:
     if df is None or len(df) == 0:
         return []
 
@@ -14,12 +20,15 @@ def build_candle_payload(df: pd.DataFrame, timeframe: str = "1s", window: int = 
     if missing:
         raise ValueError(f"Chart data requires columns: {', '.join(missing)}")
 
+    tf = timeframe if timeframe in TIMEFRAME_MAP else "1s"
+
     local = df[REQUIRED].copy()
     local["timestamp"] = pd.to_datetime(local["timestamp"], utc=True, errors="coerce")
     local = local.dropna(subset=["timestamp"]).sort_values("timestamp")
 
-    if timeframe == "1m":
-        g = local.set_index("timestamp").resample("1min")
+    rule = TIMEFRAME_MAP[tf]
+    if rule:
+        g = local.set_index("timestamp").resample(rule)
         local = pd.DataFrame(
             {
                 "open": g["open"].first(),
@@ -29,9 +38,11 @@ def build_candle_payload(df: pd.DataFrame, timeframe: str = "1s", window: int = 
             }
         ).dropna().reset_index()
 
-    tail = local.tail(max(20, int(window)))
+    if window is not None:
+        local = local.tail(max(20, int(window)))
+
     out = []
-    for _, row in tail.iterrows():
+    for _, row in local.iterrows():
         out.append(
             {
                 "t": str(row["timestamp"]),

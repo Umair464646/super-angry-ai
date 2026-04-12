@@ -188,6 +188,7 @@ class AppState(QObject):
     profileChanged = Signal()
     chartCandlesChanged = Signal()
     chartTimeframeChanged = Signal()
+    chartWindowChanged = Signal()
 
     def __init__(self) -> None:
         super().__init__()
@@ -208,6 +209,9 @@ class AppState(QObject):
         self._base_df: pd.DataFrame | None = None
         self._chart_timeframe = "1s"
         self._chart_candles: list[dict] = []
+        self._chart_all_candles: list[dict] = []
+        self._chart_window_size = 220
+        self._chart_window_end = 0
 
         self._thread: QThread | None = None
         self._worker: ResearchWorker | None = None
@@ -295,6 +299,15 @@ class AppState(QObject):
     def logUiEvent(self, message: str):
         self._append_log("UI", message)
 
+
+    @Property(int, notify=chartWindowChanged)
+    def chartWindowSize(self):
+        return self._chart_window_size
+
+    @Property(int, notify=chartWindowChanged)
+    def chartWindowEnd(self):
+        return self._chart_window_end
+
     @Slot(str)
     def setDatasetPath(self, dataset_path: str):
         normalized = self._normalize_dataset_path(dataset_path)
@@ -325,18 +338,54 @@ class AppState(QObject):
 
     @Slot(str)
     def setChartTimeframe(self, timeframe: str):
-        tf = timeframe if timeframe in {"1s", "1m"} else "1s"
+        tf = timeframe if timeframe in {"1s", "1m", "5m", "15m"} else "1s"
         self._chart_timeframe = tf
         self._append_log("UI", f"Chart timeframe changed: {tf}")
         self.chartTimeframeChanged.emit()
         self._refresh_chart_data()
 
+    @Slot(int)
+    def panChart(self, delta: int):
+        if not self._chart_all_candles:
+            return
+        self._chart_window_end = max(self._chart_window_size, min(len(self._chart_all_candles), self._chart_window_end + int(delta)))
+        self._update_chart_window()
+
+    @Slot(int)
+    def zoomChart(self, direction: int):
+        if direction > 0:
+            self._chart_window_size = max(40, int(self._chart_window_size * 0.8))
+        else:
+            self._chart_window_size = min(1200, int(self._chart_window_size * 1.25))
+        if self._chart_all_candles:
+            self._chart_window_end = max(self._chart_window_size, min(len(self._chart_all_candles), self._chart_window_end))
+        self._update_chart_window()
+
+    def _update_chart_window(self):
+        if not self._chart_all_candles:
+            self._chart_candles = []
+            self.chartCandlesChanged.emit()
+            self.chartWindowChanged.emit()
+            return
+        end = max(self._chart_window_size, min(len(self._chart_all_candles), self._chart_window_end or len(self._chart_all_candles)))
+        start = max(0, end - self._chart_window_size)
+        self._chart_window_end = end
+        self._chart_candles = self._chart_all_candles[start:end]
+        self.chartCandlesChanged.emit()
+        self.chartWindowChanged.emit()
+
     def _refresh_chart_data(self):
         if self._base_df is None:
+            self._chart_all_candles = []
             self._chart_candles = []
-        else:
-            self._chart_candles = build_candle_payload(self._base_df, timeframe=self._chart_timeframe, window=280)
-        self.chartCandlesChanged.emit()
+            self._chart_window_end = 0
+            self.chartCandlesChanged.emit()
+            self.chartWindowChanged.emit()
+            return
+
+        self._chart_all_candles = build_candle_payload(self._base_df, timeframe=self._chart_timeframe, window=None)
+        self._chart_window_end = len(self._chart_all_candles)
+        self._update_chart_window()
 
     @Slot()
     def startResearch(self):
