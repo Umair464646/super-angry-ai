@@ -20,7 +20,9 @@ from app.core.timeframe_worker import TimeframeWorker
 from app.ui.data_lab_page import DataLabPage
 from app.ui.chart_lab_page import ChartLabPage
 from app.ui.feature_lab_page import FeatureLabPage
+from app.ui.strategy_lab_page import StrategyLabPage
 from app.ui.backtest_lab_page import BacktestLabPage
+from app.ui.validation_lab_page import ValidationLabPage
 from app.ui.ai_lab_page import AILabPage
 from app.ui.placeholder_page import PlaceholderPage
 from app.ui.log_panel import LogPanel
@@ -86,15 +88,9 @@ class MainWindow(QMainWindow):
         self.data_page = DataLabPage()
         self.chart_page = ChartLabPage()
         self.feature_page = FeatureLabPage()
-        self.strategy_page = PlaceholderPage(
-            "Strategy Lab",
-            "Strategy generation comes after the Backtest Engine.",
-        )
+        self.strategy_page = StrategyLabPage()
         self.backtest_page = BacktestLabPage()
-        self.validation_page = PlaceholderPage(
-            "Validation Lab",
-            "Forward test, walk-forward, Monte Carlo, and overfit checks come later.",
-        )
+        self.validation_page = ValidationLabPage()
         self.ai_page = AILabPage()
         self.results_page = PlaceholderPage(
             "Results",
@@ -140,8 +136,17 @@ class MainWindow(QMainWindow):
         self.feature_page.timeframe_requested.connect(self.build_timeframe_async)
         self.feature_page.log_message.connect(self.log_panel.append)
 
+        self.strategy_page.timeframe_requested.connect(self.build_timeframe_async)
+        self.strategy_page.log_message.connect(self.log_panel.append)
+
         self.backtest_page.timeframe_requested.connect(self.build_timeframe_async)
         self.backtest_page.log_message.connect(self.log_panel.append)
+
+        self.validation_page.timeframe_requested.connect(self.build_timeframe_async)
+        self.validation_page.log_message.connect(self.log_panel.append)
+
+        self.ai_page.timeframe_requested.connect(self.build_timeframe_async)
+        self.ai_page.log_message.connect(self.log_panel.append)
 
     def _build_menu(self):
         menubar = self.menuBar()
@@ -168,12 +173,15 @@ class MainWindow(QMainWindow):
 
         self.chart_page.set_base_dataset(df)
         self.feature_page.set_source_context(self.source_path, self.tf_cache)
+        self.strategy_page.set_source_context(self.source_path, self.tf_cache)
         self.backtest_page.set_source_context(self.source_path, self.tf_cache)
+        self.validation_page.set_source_context(self.source_path, self.tf_cache)
+        self.ai_page.set_source_context(self.source_path, self.tf_cache)
         self.ai_page.set_dataframe(df)
 
         self.log_panel.append(
             "INFO",
-            "Base dataset propagated to Chart Lab, Feature Lab, Backtest Lab, and AI Lab",
+            "Base dataset propagated to Chart/Feature/Strategy/Backtest/Validation/AI labs",
         )
         self.sidebar.setCurrentRow(2)
 
@@ -186,7 +194,10 @@ class MainWindow(QMainWindow):
             self.log_panel.append("INFO", f"Timeframe already cached in memory: {timeframe}")
             self.chart_page.set_timeframe_dataset(timeframe, self.tf_cache[timeframe])
             self.feature_page.set_timeframe_dataset(timeframe, self.tf_cache[timeframe])
+            self.strategy_page.set_timeframe_dataset(timeframe, self.tf_cache[timeframe])
             self.backtest_page.set_timeframe_dataset(timeframe, self.tf_cache[timeframe])
+            self.validation_page.set_timeframe_dataset(timeframe, self.tf_cache[timeframe])
+            self.ai_page.set_timeframe_dataset(timeframe, self.tf_cache[timeframe])
             return
 
         if self.tf_thread is not None:
@@ -240,7 +251,10 @@ class MainWindow(QMainWindow):
         self.tf_cache[timeframe] = df
         self.chart_page.set_timeframe_dataset(timeframe, df)
         self.feature_page.set_timeframe_dataset(timeframe, df)
+        self.strategy_page.set_timeframe_dataset(timeframe, df)
         self.backtest_page.set_timeframe_dataset(timeframe, df)
+        self.validation_page.set_timeframe_dataset(timeframe, df)
+        self.ai_page.set_timeframe_dataset(timeframe, df)
 
         self.data_page.progress.setValue(100)
         self.data_page.stage_label.setText(f"Stage: timeframe ready [{timeframe}]")
@@ -248,7 +262,7 @@ class MainWindow(QMainWindow):
 
         self.log_panel.append(
             "INFO",
-            f"Timeframe propagated to Chart Lab, Feature Lab, and Backtest Lab: {timeframe} ({len(df):,} rows)",
+            f"Timeframe propagated to Chart/Feature/Strategy/Backtest/Validation labs: {timeframe} ({len(df):,} rows)",
         )
 
     def _on_timeframe_error(self, text: str):
@@ -266,77 +280,86 @@ class MainWindow(QMainWindow):
         QMessageBox.information(
             self,
             "About Crypto Strategy Lab V9 Feature Lab",
-            "Optimized build with Feature Lab, timeframe cache, exportable features, and Backtest Lab.",
+            "Build with Data/Chart/Feature/Strategy/Backtest/Validation labs and timeframe caching.",
         )
 
     def _apply_theme(self):
         self.setStyleSheet(
             """
             QMainWindow, QWidget {
-                background: #0a0c10;
-                color: #e6edf3;
-                font-family: Segoe UI;
+                background: #070a0f;
+                color: #eaf2ff;
+                font-family: Inter, Segoe UI, Arial;
                 font-size: 13px;
             }
             QMenuBar, QMenu {
-                background: #0f1218;
-                color: #e6edf3;
+                background: #0b111a;
+                color: #eaf2ff;
+                border: 1px solid #1a2534;
             }
             QListWidget {
-                background: #0f1218;
+                background: #0b111a;
                 border: none;
-                color: #93a1b3;
+                color: #9bb2c9;
                 font-size: 13px;
             }
             QListWidget::item {
-                padding: 12px 14px;
+                padding: 12px 16px;
                 border-left: 3px solid transparent;
+                margin: 2px 6px;
+                border-radius: 6px;
             }
             QListWidget::item:selected {
-                background: #001a22;
-                color: #00d4ff;
-                border-left: 3px solid #00d4ff;
+                background: #0f2031;
+                color: #49c8ff;
+                border-left: 3px solid #49c8ff;
             }
             QPushButton {
-                background: #00d4ff;
-                color: #000;
-                padding: 8px 14px;
-                border: none;
-                border-radius: 4px;
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #00b8ff, stop:1 #00e0b8);
+                color: #031018;
+                padding: 9px 16px;
+                border: 1px solid #12364a;
+                border-radius: 8px;
                 font-weight: 600;
             }
             QPushButton:hover {
-                background: #00b7dd;
+                background: #23d0ff;
             }
             QPushButton:disabled {
-                background: #24313d;
-                color: #76879a;
+                background: #1b2633;
+                color: #6f8498;
+                border: 1px solid #223142;
             }
             QTextEdit, QComboBox, QPlainTextEdit, QLineEdit, QTableWidget {
-                background: #0f1218;
-                border: 1px solid #1f2933;
-                color: #e6edf3;
+                background: #0b111a;
+                border: 1px solid #1d2a3b;
+                color: #eaf2ff;
+                border-radius: 8px;
+                selection-background-color: #174b66;
             }
             QHeaderView::section {
-                background: #131720;
-                color: #9fb0c0;
-                border: 1px solid #1f2933;
-                padding: 6px;
+                background: #0e1724;
+                color: #9fb5cc;
+                border: 1px solid #1c2a3a;
+                padding: 7px;
+                font-weight: 600;
             }
             QLabel, QCheckBox {
-                color: #e6edf3;
+                color: #eaf2ff;
             }
             QProgressBar {
-                border: 1px solid #1f2933;
-                background: #0f1218;
-                color: #e6edf3;
+                border: 1px solid #1c2a3a;
+                background: #0a111a;
+                color: #d9e8f7;
                 text-align: center;
+                border-radius: 8px;
             }
             QProgressBar::chunk {
-                background: #00d4ff;
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #00b8ff, stop:1 #00e0b8);
+                border-radius: 8px;
             }
             QSplitter::handle {
-                background: #11161d;
+                background: #121b28;
                 height: 6px;
             }
             """
