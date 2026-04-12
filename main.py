@@ -1,4 +1,5 @@
-from app.ui.main_window import run
+from app.ui.qml_app import run_qml
+
 
 if __name__ == "__main__":
-    run()
+    raise SystemExit(run_qml())
