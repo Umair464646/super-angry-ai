@@ -59,17 +59,14 @@ Item {
                 radius: 12
                 color: "#0F1725"
                 border.color: "#1B2A41"
-                Column {
+                ColumnLayout {
                     anchors.fill: parent
                     anchors.margins: 10
                     spacing: 6
                     Label { text: "Preview (first 20 rows of feature dataset)"; color: "#DCEAFF"; font.bold: true }
                     ScrollView {
-                        anchors.left: parent.left
-                        anchors.right: parent.right
-                        anchors.top: parent.top
-                        anchors.bottom: parent.bottom
-                        anchors.topMargin: 26
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
                         TextArea {
                             readOnly: true
                             wrapMode: Text.NoWrap
