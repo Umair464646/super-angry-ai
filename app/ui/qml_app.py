@@ -52,6 +52,8 @@ class ResearchWorker(QObject):
         observed_rg = float((context or {}).get("ctx_ranging_avg_return", 0.0) or 0.0)
         observed_hv = float((context or {}).get("ctx_high_vol_avg_return", 0.0) or 0.0)
         observed_lv = float((context or {}).get("ctx_low_vol_avg_return", 0.0) or 0.0)
+        trend_conf = float((context or {}).get("ctx_trend_confidence", 0.0) or 0.0)
+        vol_conf = float((context or {}).get("ctx_volatility_confidence", 0.0) or 0.0)
 
         template_regime = "trend-following"
         if "breakout" in key or "breakout" in inds or "donchian" in inds:
@@ -59,6 +61,8 @@ class ResearchWorker(QObject):
         elif "reversal" in key or "mean" in key or "rsi" in inds or "zscore" in inds:
             template_regime = "mean-reversion"
 
+        if max(trend_conf, vol_conf) < 0.22:
+            return "uncertain"
         if observed_tr - observed_rg > 0.08:
             return "trend-following"
         if observed_rg - observed_tr > 0.08:
@@ -150,6 +154,8 @@ class ResearchWorker(QObject):
                         "ctx_low_vol_avg_return": row.get("ctx_low_vol_avg_return", 0.0),
                         "ctx_trending_avg_return": row.get("ctx_trending_avg_return", 0.0),
                         "ctx_ranging_avg_return": row.get("ctx_ranging_avg_return", 0.0),
+                        "ctx_trend_confidence": row.get("ctx_trend_confidence", 0.0),
+                        "ctx_volatility_confidence": row.get("ctx_volatility_confidence", 0.0),
                     }
                     explanation = self._strategy_explanation(
                         str(row.get("template_key", "")),
@@ -186,6 +192,10 @@ class ResearchWorker(QObject):
                         "ctx_low_vol_avg_return": round(float(row.get("ctx_low_vol_avg_return", 0.0)), 4),
                         "ctx_trending_avg_return": round(float(row.get("ctx_trending_avg_return", 0.0)), 4),
                         "ctx_ranging_avg_return": round(float(row.get("ctx_ranging_avg_return", 0.0)), 4),
+                        "context_confidence": round(float(row.get("ctx_confidence", 0.0)), 4),
+                        "trend_context_confidence": round(float(row.get("ctx_trend_confidence", 0.0)), 4),
+                        "volatility_context_confidence": round(float(row.get("ctx_volatility_confidence", 0.0)), 4),
+                        "behavior_robustness": round(float(row.get("behavior_robustness", 0.0)), 2),
                     }
                     self.strategy.emit(payload)
                     self.log.emit(
@@ -220,6 +230,8 @@ class ResearchWorker(QObject):
                         "ctx_low_vol_avg_return": row.get("ctx_low_vol_avg_return", 0.0),
                         "ctx_trending_avg_return": row.get("ctx_trending_avg_return", 0.0),
                         "ctx_ranging_avg_return": row.get("ctx_ranging_avg_return", 0.0),
+                        "ctx_trend_confidence": row.get("ctx_trend_confidence", 0.0),
+                        "ctx_volatility_confidence": row.get("ctx_volatility_confidence", 0.0),
                     }
                     explanation = self._strategy_explanation(str(row["template_key"]), params, context=context)
                     key_sig = (str(row["template_key"]), str(sorted(params.items())))
@@ -254,6 +266,10 @@ class ResearchWorker(QObject):
                         "ctx_low_vol_avg_return": round(float(row.get("ctx_low_vol_avg_return", 0.0)), 4),
                         "ctx_trending_avg_return": round(float(row.get("ctx_trending_avg_return", 0.0)), 4),
                         "ctx_ranging_avg_return": round(float(row.get("ctx_ranging_avg_return", 0.0)), 4),
+                        "context_confidence": round(float(row.get("ctx_confidence", 0.0)), 4),
+                        "trend_context_confidence": round(float(row.get("ctx_trend_confidence", 0.0)), 4),
+                        "volatility_context_confidence": round(float(row.get("ctx_volatility_confidence", 0.0)), 4),
+                        "behavior_robustness": round(float(row.get("behavior_robustness", 0.0)), 2),
                     }
                     self.strategy.emit(payload)
 
@@ -279,6 +295,8 @@ class ResearchWorker(QObject):
                     "ctx_low_vol_avg_return": vrow.get("ctx_low_vol_avg_return", 0.0),
                     "ctx_trending_avg_return": vrow.get("ctx_trending_avg_return", 0.0),
                     "ctx_ranging_avg_return": vrow.get("ctx_ranging_avg_return", 0.0),
+                    "ctx_trend_confidence": vrow.get("ctx_trend_confidence", 0.0),
+                    "ctx_volatility_confidence": vrow.get("ctx_volatility_confidence", 0.0),
                 }
                 explanation = self._strategy_explanation(str(vrow["template_key"]), params, context=context)
                 self.log.emit("INFO", f"validation running [{v_idx}/{len(validation_targets)}] {vrow['template_key']} params={params}")
@@ -320,6 +338,10 @@ class ResearchWorker(QObject):
                     "ctx_low_vol_avg_return": round(float(vrow.get("ctx_low_vol_avg_return", 0.0)), 4),
                     "ctx_trending_avg_return": round(float(vrow.get("ctx_trending_avg_return", 0.0)), 4),
                     "ctx_ranging_avg_return": round(float(vrow.get("ctx_ranging_avg_return", 0.0)), 4),
+                    "context_confidence": round(float(vrow.get("ctx_confidence", 0.0)), 4),
+                    "trend_context_confidence": round(float(vrow.get("ctx_trend_confidence", 0.0)), 4),
+                    "volatility_context_confidence": round(float(vrow.get("ctx_volatility_confidence", 0.0)), 4),
+                    "behavior_robustness": round(float(vrow.get("behavior_robustness", 0.0)), 2),
                 })
                 self.log.emit("INFO", f"validation completed [{v_idx}/{len(validation_targets)}] stability={float(v_stability):.2f}")
                 if v_idx == 1:

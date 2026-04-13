@@ -409,6 +409,9 @@ def _performance_context_analysis(test_df: pd.DataFrame, trades_df: pd.DataFrame
             "low_vol_avg_return": 0.0,
             "trending_avg_return": 0.0,
             "ranging_avg_return": 0.0,
+            "trend_confidence": 0.0,
+            "volatility_confidence": 0.0,
+            "context_confidence": 0.0,
             "performance_context": "Insufficient trades for context analysis",
         }
 
@@ -433,6 +436,9 @@ def _performance_context_analysis(test_df: pd.DataFrame, trades_df: pd.DataFrame
             "low_vol_avg_return": 0.0,
             "trending_avg_return": 0.0,
             "ranging_avg_return": 0.0,
+            "trend_confidence": 0.0,
+            "volatility_confidence": 0.0,
+            "context_confidence": 0.0,
             "performance_context": "Insufficient trades for context analysis",
         }
 
@@ -451,6 +457,20 @@ def _performance_context_analysis(test_df: pd.DataFrame, trades_df: pd.DataFrame
     lv = float(tagged.loc[~tagged["high_vol"], "return_pct"].mean()) if (~tagged["high_vol"]).any() else 0.0
     tr = float(tagged.loc[tagged["trending"], "return_pct"].mean()) if (tagged["trending"]).any() else 0.0
     rg = float(tagged.loc[~tagged["trending"], "return_pct"].mean()) if (~tagged["trending"]).any() else 0.0
+    n_high = int(tagged["high_vol"].sum())
+    n_low = int((~tagged["high_vol"]).sum())
+    n_tr = int(tagged["trending"].sum())
+    n_rg = int((~tagged["trending"]).sum())
+
+    trend_diff = abs(tr - rg)
+    vol_diff = abs(hv - lv)
+    trend_size_factor = min(1.0, min(n_tr, n_rg) / 10.0) if (n_tr > 0 and n_rg > 0) else 0.0
+    vol_size_factor = min(1.0, min(n_high, n_low) / 10.0) if (n_high > 0 and n_low > 0) else 0.0
+    trend_mag_factor = min(1.0, trend_diff / 0.25)
+    vol_mag_factor = min(1.0, vol_diff / 0.25)
+    trend_conf = trend_size_factor * trend_mag_factor
+    vol_conf = vol_size_factor * vol_mag_factor
+    context_conf = (trend_conf + vol_conf) / 2.0
 
     if tr - rg > 0.08:
         base = "Performs best in trending markets"
@@ -471,6 +491,9 @@ def _performance_context_analysis(test_df: pd.DataFrame, trades_df: pd.DataFrame
         "low_vol_avg_return": round(lv, 4),
         "trending_avg_return": round(tr, 4),
         "ranging_avg_return": round(rg, 4),
+        "trend_confidence": round(trend_conf, 4),
+        "volatility_confidence": round(vol_conf, 4),
+        "context_confidence": round(context_conf, 4),
         "performance_context": f"{base}; {vol_note}",
     }
 
@@ -813,6 +836,12 @@ def evolve_templates(
             max_loss_pct = float(test_trades["return_pct"].min()) if not test_trades.empty else 0.0
             wins = int((test_trades["net_pnl"] > 0).sum()) if not test_trades.empty else 0
             losses = int((test_trades["net_pnl"] < 0).sum()) if not test_trades.empty else 0
+            trend_diff = abs(float(perf_context.get("trending_avg_return", 0.0)) - float(perf_context.get("ranging_avg_return", 0.0)))
+            vol_diff = abs(float(perf_context.get("high_vol_avg_return", 0.0)) - float(perf_context.get("low_vol_avg_return", 0.0)))
+            consistency = max(0.0, 1.0 - min(1.0, (trend_diff + vol_diff) / 0.8))
+            trade_stability = min(1.0, int(test["total_trades"]) / 40.0)
+            dd_stability = max(0.0, 1.0 - min(1.0, abs(float(test["max_drawdown_pct"])) / 35.0))
+            behavior_robustness = round((trade_stability * 0.45 + consistency * 0.35 + dd_stability * 0.20) * 100.0, 2)
             complexity_score = float(len(t.indicators)) * 1.8 + float(len(params)) * 0.35
             row = {
                 "strategy": t.name,
@@ -836,7 +865,11 @@ def evolve_templates(
                 "ctx_low_vol_avg_return": float(perf_context.get("low_vol_avg_return", 0.0)),
                 "ctx_trending_avg_return": float(perf_context.get("trending_avg_return", 0.0)),
                 "ctx_ranging_avg_return": float(perf_context.get("ranging_avg_return", 0.0)),
+                "ctx_trend_confidence": float(perf_context.get("trend_confidence", 0.0)),
+                "ctx_volatility_confidence": float(perf_context.get("volatility_confidence", 0.0)),
+                "ctx_confidence": float(perf_context.get("context_confidence", 0.0)),
                 "performance_context": str(perf_context.get("performance_context", "")),
+                "behavior_robustness": behavior_robustness,
             }
             all_rows.append(row)
             if result_cb is not None:

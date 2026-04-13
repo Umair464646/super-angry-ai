@@ -8,7 +8,7 @@ Rectangle {
     property bool selected: false
     signal clicked()
 
-    height: 138
+    height: 150
     radius: 10
     color: selected ? "#123052" : (row.rank <= 3 ? "#13263A" : (hovered ? "#111C2D" : "#0E1623"))
     border.color: selected ? "#36A3FF" : (row.rank <= 3 ? "#E6B85C" : "#1B2A41")
@@ -61,6 +61,10 @@ Rectangle {
             maximumLineCount: 1
             elide: Text.ElideRight
             Layout.fillWidth: true
+        }
+        RowLayout {
+            Label { text: "CtxConf " + Math.round((row.context_confidence || 0) * 100) + "%"; color: "#8ED2D7"; font.pixelSize: 10 }
+            Label { text: "Robust " + (row.behavior_robustness || 0); color: "#D8CF8E"; font.pixelSize: 10 }
         }
     }
 
