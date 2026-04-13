@@ -483,6 +483,7 @@ class AppState(QObject):
         self._worker: ResearchWorker | None = None
         self._rank_tick = 0
         self._rank_tracker: dict[str, dict] = {}
+        self._elite_pool: dict[str, dict] = {}
 
     @Property("QVariantList", notify=strategiesChanged)
     def strategies(self):
@@ -752,6 +753,7 @@ class AppState(QObject):
         self._feature_importance = {}
         self._rank_tick = 0
         self._rank_tracker = {}
+        self._elite_pool = {}
         self.strategiesChanged.emit()
         self.selectedStrategyChanged.emit()
         self.fitnessSeriesChanged.emit()
@@ -932,6 +934,34 @@ class AppState(QObject):
         for row in self._strategies:
             row["dominant_candidate"] = str(row.get("id", "")) == dominant_id
             row["dominant_provisional"] = bool(str(row.get("id", "")) == str(self._strategies[0].get("id", "")) and dominant_id is None and n > 1 and population_maturity < float(np.mean(comp)))
+
+        # Rolling elite pool (persistent across cycles within a run).
+        elite_target = max(1, int(round(np.sqrt(n))))
+        score_pct_vals = np.array([float(r.get("percentile_rank", 0.0)) for r in self._strategies], dtype=float)
+        robust_pct_vals = np.array([float((robust_vals <= float(r.get("behavior_robustness", 0.0))).mean()) for r in self._strategies], dtype=float)
+        stab_pct_vals = np.array([float((stability_vals <= float(r.get("rank_stability", 0.0))).mean()) for r in self._strategies], dtype=float)
+        elite_signal = (np.clip(score_pct_vals, 1e-9, 1.0) * np.clip(robust_pct_vals, 1e-9, 1.0) * np.clip(stab_pct_vals, 1e-9, 1.0)) ** (1.0 / 3.0)
+        pool_scores: list[tuple[float, str]] = []
+        for i, row in enumerate(self._strategies):
+            sid = str(row.get("id", ""))
+            prior = self._elite_pool.get(sid, {})
+            tenure = int(prior.get("tenure", 0))
+            tenure_boost = 1.0 - np.exp(-float(tenure) / (np.sqrt(n) + 1.0))
+            stability_gate = float(np.clip(row.get("rank_stability", 0.0), 0.0, 1.0))
+            value = float(elite_signal[i]) * (0.5 + 0.5 * stability_gate) * (1.0 + tenure_boost)
+            pool_scores.append((value, sid))
+        pool_scores.sort(key=lambda x: x[0], reverse=True)
+        next_elite_ids = {sid for _, sid in pool_scores[:elite_target]}
+        new_pool: dict[str, dict] = {}
+        for row in self._strategies:
+            sid = str(row.get("id", ""))
+            if sid in next_elite_ids:
+                prev_tenure = int(self._elite_pool.get(sid, {}).get("tenure", 0))
+                new_pool[sid] = {"tenure": prev_tenure + 1}
+                row["elite_status"] = True
+            else:
+                row["elite_status"] = False
+        self._elite_pool = new_pool
 
         # Adaptive survival filter (mark-only; no deletions).
         robust_pct_vals = np.array(
