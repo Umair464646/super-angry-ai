@@ -1,0 +1,55 @@
+from __future__ import annotations
+
+from PyQt6.QtCore import QObject, pyqtSignal, pyqtSlot
+
+from app.core.ai_engine import analyze_market_ai
+
+
+class AIWorker(QObject):
+    progress = pyqtSignal(int)
+    stage = pyqtSignal(str)
+    log = pyqtSignal(str, str)
+    finished = pyqtSignal(object)
+    error = pyqtSignal(str)
+    epoch = pyqtSignal(int, int, float, float, object)
+
+    def __init__(self, df, model_type: str = "mlp"):
+        super().__init__()
+        self.df = df
+        self.model_type = model_type
+
+    @pyqtSlot()
+    def run(self):
+        try:
+            self.stage.emit("Preparing AI inputs")
+            self.progress.emit(10)
+
+            if self.df is None or len(self.df) == 0:
+                raise ValueError("AI input dataframe is empty")
+
+            self.log.emit("INFO", f"AI rows: {len(self.df):,}")
+            self.progress.emit(35)
+
+            self.stage.emit("Training setup scoring model")
+            result = analyze_market_ai(
+                self.df,
+                model_type=self.model_type,
+                epoch_cb=lambda e, total, loss, acc, extra=None: self.epoch.emit(e, total, loss, acc, extra or {}),
+            )
+
+            self.progress.emit(90)
+            self.stage.emit("Finalizing AI outputs")
+
+            self.log.emit("INFO", f"AI avg confidence: {result.summary['avg_confidence']:.3f}")
+            self.log.emit("INFO", f"AI high-confidence setups: {result.summary['high_confidence_rows']:,}")
+            self.log.emit("INFO", f"AI final train accuracy: {result.summary['train_final_accuracy']:.3f}")
+
+            self.progress.emit(100)
+            self.stage.emit("AI analysis complete")
+            self.finished.emit(result)
+
+        except Exception as exc:
+            self.progress.emit(0)
+            self.stage.emit("AI analysis failed")
+            self.log.emit("ERROR", str(exc))
+            self.error.emit(str(exc))
