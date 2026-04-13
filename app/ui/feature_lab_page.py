@@ -37,6 +37,19 @@ FEATURE_OPTIONS = [
     "VOLUME_SPIKE",
     "BREAKOUT",
     "CANDLE_RATIOS",
+    "VWAP",
+    "MOMENTUM",
+    "ORDER_FLOW",
+    "ZSCORE",
+    "DONCHIAN",
+    "STOCHASTIC",
+    "KELTNER",
+    "ADX",
+    "CCI",
+    "WILLIAMS_R",
+    "OBV",
+    "CMF",
+    "ICHIMOKU",
 ]
 
 
