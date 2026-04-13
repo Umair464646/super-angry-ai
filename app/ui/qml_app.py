@@ -46,18 +46,20 @@ class ResearchWorker(QObject):
             if not Path(self.dataset_path).exists():
                 raise ValueError(f"Dataset not found: {self.dataset_path}")
 
-            self.stage.emit("Loading dataset")
+            self.stage.emit("Dataset load")
+            self.log.emit("INFO", "dataset load started")
             df, profile = load_market_file_minimal(self.dataset_path)
-            self.log.emit("INFO", f"Loaded dataset rows={len(df):,} synthetic={profile.synthetic_pct:.2f}%")
+            self.log.emit("INFO", f"dataset ready: rows={len(df):,} synthetic={profile.synthetic_pct:.2f}%")
             if self._cancel:
                 return
 
-            self.stage.emit("Feature engineering")
+            self.stage.emit("Feature generation")
+            self.log.emit("INFO", "feature generation started")
             selected_features = [
                 "EMA", "RSI", "MACD", "ATR", "BOLLINGER", "VWAP", "MOMENTUM", "ORDER_FLOW", "BREAKOUT",
             ]
             featured_df, generated_cols = generate_features(df, selected_features)
-            self.log.emit("INFO", f"Generated {len(generated_cols)} features")
+            self.log.emit("INFO", f"feature generation completed: generated={len(generated_cols)}")
             if self._cancel:
                 return
 
@@ -67,7 +69,8 @@ class ResearchWorker(QObject):
                 working_df = working_df.iloc[::stride].reset_index(drop=True)
                 self.log.emit("WARN", f"Downsampled research rows for responsiveness: {len(featured_df):,}->{len(working_df):,}")
 
-            self.stage.emit("Strategy evolution")
+            self.stage.emit("Strategy generation")
+            self.log.emit("INFO", "strategy generation started")
             generation_fitness: list[float] = []
             seed_pool: list[dict] = []
             last_top = None
@@ -76,6 +79,8 @@ class ResearchWorker(QObject):
             for gen in range(1, self.generations + 1):
                 if self._cancel:
                     return
+                self.stage.emit(f"Backtest generation {gen}/{self.generations}")
+                self.log.emit("INFO", f"backtest started: generation={gen}")
                 all_variants, top_variants = evolve_templates(
                     working_df,
                     top_k=self.population_top_k,
@@ -114,21 +119,25 @@ class ResearchWorker(QObject):
                     self.strategy.emit(payload)
 
                 seed_pool = top_variants[["template_key", "params"]].to_dict("records")
-                self.log.emit("INFO", f"Generation {gen}/{self.generations} best fitness={float(best['fitness']):.2f}")
+                self.log.emit("INFO", f"backtest completed: generation={gen} best_fitness={float(best['fitness']):.2f}")
+
+            self.log.emit("INFO", f"strategy generation completed: total_candidates={strategy_counter}")
 
             if last_top is None:
                 raise RuntimeError("Evolution completed with no best strategy")
 
-            self.stage.emit("Walk-forward validation")
+            self.stage.emit("Validation")
+            self.log.emit("INFO", "validation started")
             wf, stability = walk_forward_validate(
                 working_df,
                 template_key=str(last_top["template_key"]),
                 params=dict(last_top["params"]),
                 folds=4,
             )
-            self.log.emit("INFO", f"Walk-forward stability={stability:.2f}")
+            self.log.emit("INFO", f"validation completed: walk_forward_stability={stability:.2f}")
 
             self.stage.emit("AI analysis")
+            self.log.emit("INFO", "AI analysis started")
 
             def _epoch_cb(epoch, total, loss, acc, extra):
                 payload = {
@@ -145,7 +154,9 @@ class ResearchWorker(QObject):
                 self.ai_epoch.emit(payload)
 
             ai = analyze_market_ai(working_df, model_type=self.model_type, epoch_cb=_epoch_cb)
+            self.log.emit("INFO", "AI analysis completed")
 
+            self.stage.emit("Finalizing results")
             payload = {
                 "profile": asdict(profile),
                 "feature_count": len(generated_cols),
@@ -166,6 +177,7 @@ class ResearchWorker(QObject):
                     "architecture": ai.nn_architecture,
                 },
             }
+            self.log.emit("INFO", "final results ready")
             self.finished.emit(payload)
         except Exception as exc:
             self.failed.emit(str(exc))
@@ -612,7 +624,7 @@ class AppState(QObject):
         data = dict(payload)
         self._model_status = "completed"
         self.modelStatusChanged.emit()
-        self._set_stage("Completed")
+        self._set_stage("Final results ready")
 
         self._profile = dict(data.get("profile", {}))
         self.profileChanged.emit()
