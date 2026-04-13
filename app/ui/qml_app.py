@@ -175,6 +175,8 @@ class ResearchWorker(QObject):
                         "name": str(row.get("strategy", "n/a")),
                         "family": str(row.get("template_key", "n/a")),
                         "origin": str(row.get("origin", "random")),
+                        "mutation_type": str(row.get("mutation_type", "base")),
+                        "parent_id": str(row.get("parent_id", "none")),
                         "fitness": round(float(row.get("fitness", 0.0)), 4),
                         "robustness": round(float(row.get("robustness_score", 0.0)), 4),
                         "validation": "pending",
@@ -257,6 +259,8 @@ class ResearchWorker(QObject):
                         "name": str(row["strategy"]),
                         "family": str(row["template_key"]),
                         "origin": str(row.get("origin", "random")),
+                        "mutation_type": str(row.get("mutation_type", "base")),
+                        "parent_id": str(row.get("parent_id", "none")),
                         "fitness": round(float(row["fitness"]), 4),
                         "robustness": round(float(row["robustness_score"]), 4),
                         "validation": round(float(row["robustness_score"]), 4),
@@ -347,6 +351,8 @@ class ResearchWorker(QObject):
                     "name": str(vrow["strategy"]),
                     "family": str(vrow["template_key"]),
                     "origin": str(vrow.get("origin", "random")),
+                    "mutation_type": str(vrow.get("mutation_type", "base")),
+                    "parent_id": str(vrow.get("parent_id", "none")),
                     "fitness": round(float(vrow["fitness"]), 4),
                     "robustness": round(float(vrow["robustness_score"]), 4),
                     "validation": round(float(v_stability), 4),
@@ -498,6 +504,8 @@ class AppState(QObject):
         self._rank_tick = 0
         self._rank_tracker: dict[str, dict] = {}
         self._elite_pool: dict[str, dict] = {}
+        self._strategy_perf_index: dict[str, float] = {}
+        self._mutation_feedback: dict[str, dict] = {}
 
     @Property("QVariantList", notify=strategiesChanged)
     def strategies(self):
@@ -768,6 +776,8 @@ class AppState(QObject):
         self._rank_tick = 0
         self._rank_tracker = {}
         self._elite_pool = {}
+        self._strategy_perf_index = {}
+        self._mutation_feedback = {}
         self.strategiesChanged.emit()
         self.selectedStrategyChanged.emit()
         self.fitnessSeriesChanged.emit()
@@ -1088,6 +1098,36 @@ class AppState(QObject):
     def _on_strategy(self, payload: object):
         row = dict(payload)
         row_id = str(row.get("id", ""))
+        child_perf = float(row.get("fitness", 0.0) or 0.0)
+        parent_id = str(row.get("parent_id", "none"))
+        mutation_type = str(row.get("mutation_type", "base"))
+        if mutation_type and mutation_type != "base" and parent_id and parent_id != "none":
+            parent_perf = self._strategy_perf_index.get(parent_id)
+            if parent_perf is not None:
+                improvement = child_perf - float(parent_perf)
+                stat = self._mutation_feedback.get(
+                    mutation_type,
+                    {
+                        "count": 0,
+                        "total_improvement": 0.0,
+                        "avg_improvement": 0.0,
+                        "improved": 0,
+                        "degraded": 0,
+                        "last_parent_perf": 0.0,
+                        "last_child_perf": 0.0,
+                    },
+                )
+                stat["count"] += 1
+                stat["total_improvement"] += float(improvement)
+                stat["avg_improvement"] = stat["total_improvement"] / max(1, stat["count"])
+                if improvement >= 0:
+                    stat["improved"] += 1
+                else:
+                    stat["degraded"] += 1
+                stat["last_parent_perf"] = float(parent_perf)
+                stat["last_child_perf"] = child_perf
+                self._mutation_feedback[mutation_type] = stat
+
         replaced = False
         for i, existing in enumerate(self._strategies):
             if str(existing.get("id", "")) == row_id and row_id:
@@ -1099,6 +1139,8 @@ class AppState(QObject):
         if not replaced:
             self._strategies.insert(0, row)
             self._strategies = self._strategies[:800]
+        if row_id:
+            self._strategy_perf_index[row_id] = child_perf
         self._resort_and_rank_strategies()
         self.strategiesChanged.emit()
         if self._selected_strategy and row_id and str(self._selected_strategy.get("id", "")) == row_id:
