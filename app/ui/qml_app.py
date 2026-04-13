@@ -943,7 +943,7 @@ class AppState(QObject):
         elite_signal = (np.clip(score_pct_vals, 1e-9, 1.0) * np.clip(robust_pct_vals, 1e-9, 1.0) * np.clip(stab_pct_vals, 1e-9, 1.0)) ** (1.0 / 3.0)
         signal_dispersion = float(np.std(elite_signal, ddof=0))
         prior_elites = set(self._elite_pool.keys())
-        pool_scores: list[tuple[float, float, str]] = []  # (value_with_tenure, base_signal, id)
+        pool_scores: list[dict] = []
         for i, row in enumerate(self._strategies):
             sid = str(row.get("id", ""))
             prior = self._elite_pool.get(sid, {})
@@ -951,22 +951,52 @@ class AppState(QObject):
             tenure_norm = float(tenure / (tenure + np.sqrt(n) + 1.0))
             tenure_bonus = tenure_norm * signal_dispersion
             value = float(elite_signal[i]) + tenure_bonus
-            pool_scores.append((value, float(elite_signal[i]), sid))
+            family = str(row.get("family", ""))
+            indicators = str(row.get("indicators", ""))
+            ind_parts = sorted([p.strip().lower() for p in indicators.split(",") if p.strip()])
+            ind_sig = "|".join(ind_parts)
+            pool_scores.append(
+                {
+                    "value": value,
+                    "base": float(elite_signal[i]),
+                    "id": sid,
+                    "family": family,
+                    "ind_sig": ind_sig,
+                }
+            )
 
-        pool_scores.sort(key=lambda x: x[0], reverse=True)
-        selected = pool_scores[:elite_target]
+        # Diversity-aware soft selection: penalize over-represented template/indicator groups.
+        remaining = sorted(pool_scores, key=lambda x: x["value"], reverse=True)
+        selected: list[dict] = []
+        fam_counts: dict[str, int] = {}
+        sig_counts: dict[str, int] = {}
+        for _ in range(min(elite_target, len(remaining))):
+            best_idx = -1
+            best_adj = -1e18
+            denom_base = max(1.0, float(len(selected) + 1))
+            for idx, cand in enumerate(remaining):
+                fam_pen = fam_counts.get(cand["family"], 0) / denom_base
+                sig_pen = sig_counts.get(cand["ind_sig"], 0) / denom_base
+                adjusted = cand["value"] / (1.0 + fam_pen + sig_pen)
+                if adjusted > best_adj:
+                    best_adj = adjusted
+                    best_idx = idx
+            chosen = remaining.pop(best_idx)
+            selected.append(chosen)
+            fam_counts[chosen["family"]] = fam_counts.get(chosen["family"], 0) + 1
+            sig_counts[chosen["ind_sig"]] = sig_counts.get(chosen["ind_sig"], 0) + 1
 
         # Challenge mechanism: allow stronger non-elites to replace weaker tenure-protected elites.
         if selected:
-            challengers = [p for p in sorted(pool_scores[elite_target:], key=lambda x: x[1], reverse=True) if p[2] not in prior_elites]
-            selected_ids = {s[2] for s in selected}
+            selected_ids = {s["id"] for s in selected}
+            challengers = [p for p in sorted(pool_scores, key=lambda x: x["base"], reverse=True) if p["id"] not in selected_ids and p["id"] not in prior_elites]
             while challengers:
-                weakest_idx = min(range(len(selected)), key=lambda idx: selected[idx][1])
+                weakest_idx = min(range(len(selected)), key=lambda idx: selected[idx]["base"])
                 weakest = selected[weakest_idx]
                 challenger = challengers[0]
-                if challenger[1] > weakest[1]:
-                    selected_ids.discard(weakest[2])
-                    selected_ids.add(challenger[2])
+                if challenger["base"] > weakest["base"]:
+                    selected_ids.discard(weakest["id"])
+                    selected_ids.add(challenger["id"])
                     selected[weakest_idx] = challenger
                     challengers.pop(0)
                 else:
