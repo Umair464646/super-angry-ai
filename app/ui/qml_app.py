@@ -221,6 +221,7 @@ class ResearchWorker(QObject):
                     result_cb=_emit_streamed_variant,
                     seed_pool=seed_pool,
                     max_variants=180,
+                    mutation_only_from_seed=(gen > 1),
                 )
                 if top_variants.empty:
                     raise RuntimeError("No strategy variants generated")
@@ -290,7 +291,18 @@ class ResearchWorker(QObject):
                     }
                     self.strategy.emit(payload)
 
-                seed_pool = top_variants[["template_key", "params"]].to_dict("records")
+                next_seed_pool = []
+                for _, srow in top_variants.iterrows():
+                    sparams = dict(srow["params"])
+                    sig = f"{srow['template_key']}|{json.dumps(sparams, sort_keys=True)}"
+                    next_seed_pool.append(
+                        {
+                            "template_key": str(srow["template_key"]),
+                            "params": sparams,
+                            "strategy_id": strategy_ids.get(sig, f"GEN{gen}-seed"),
+                        }
+                    )
+                seed_pool = next_seed_pool
                 self.log.emit("INFO", f"backtest completed: generation={gen} best_fitness={float(best['fitness']):.2f}")
 
             self.log.emit("INFO", f"strategy generation completed: total_candidates={strategy_counter}")

@@ -822,12 +822,15 @@ def evolve_templates(
     seed_pool: list[dict[str, Any]] | None = None,
     max_variants: int = 500,
     exploration_strength: float = 0.0,
+    mutation_only_from_seed: bool = False,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     cfg = config or BacktestConfig()
     all_rows: list[dict[str, Any]] = []
     rng = np.random.default_rng(42 + len(df) + top_k)
 
-    grids = [{"template": t, "params": p, "origin": "random", "mutation_type": "base", "parent_id": "none"} for t in TEMPLATES for p in _variant_param_grid(t.key, t.params)]
+    grids = []
+    if not (mutation_only_from_seed and seed_pool):
+        grids = [{"template": t, "params": p, "origin": "random", "mutation_type": "base", "parent_id": "none"} for t in TEMPLATES for p in _variant_param_grid(t.key, t.params)]
     if seed_pool:
         template_map = {t.key: t for t in TEMPLATES}
         for seed in seed_pool:
@@ -838,7 +841,8 @@ def evolve_templates(
                 continue
             pid = str(seed.get("strategy_id", "seed"))
             grids.append({"template": t, "params": params, "origin": "mutation", "mutation_type": "elite_seed", "parent_id": pid})
-            for tier, n_mut in [("minor", 8), ("medium", 8), ("major", 4)]:
+            tiers = [("minor", 8), ("medium", 8)] if mutation_only_from_seed else [("minor", 8), ("medium", 8), ("major", 4)]
+            for tier, n_mut in tiers:
                 for mp in _mutate_param_variants(key, params, rng=rng, n=n_mut + int(8 * exploration_strength)):
                     mt = tier
                     tt = t
