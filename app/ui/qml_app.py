@@ -933,6 +933,33 @@ class AppState(QObject):
             row["dominant_candidate"] = str(row.get("id", "")) == dominant_id
             row["dominant_provisional"] = bool(str(row.get("id", "")) == str(self._strategies[0].get("id", "")) and dominant_id is None and n > 1 and population_maturity < float(np.mean(comp)))
 
+        # Adaptive survival filter (mark-only; no deletions).
+        robust_pct_vals = np.array(
+            [float((robust_vals <= float(r.get("behavior_robustness", 0.0))).mean()) for r in self._strategies],
+            dtype=float,
+        )
+        conf_vals = np.array([float(r.get("context_confidence", 0.0)) for r in self._strategies], dtype=float)
+        conf_pct_vals = np.array([float((conf_vals <= float(v)).mean()) for v in conf_vals], dtype=float)
+        decay_penalties = np.array(
+            [float(r.get("decay_score", 0.0)) if bool(r.get("decay_flag", False)) else 0.0 for r in self._strategies],
+            dtype=float,
+        )
+        decay_good_vals = 1.0 - np.clip(decay_penalties * population_maturity, 0.0, 1.0)
+        health = 0.4 * robust_pct_vals + 0.4 * conf_pct_vals + 0.2 * decay_good_vals
+        q_filtered = min(0.49, population_maturity * population_maturity * 0.5)
+        q_weak = min(0.85, (population_maturity * 0.5) + q_filtered)
+        filtered_cut = float(np.quantile(health, q_filtered)) if len(health) else 0.0
+        weak_cut = float(np.quantile(health, q_weak)) if len(health) else 0.0
+        for i, row in enumerate(self._strategies):
+            h = float(health[i])
+            if h <= filtered_cut:
+                row["survival_status"] = "filtered"
+            elif h <= weak_cut:
+                row["survival_status"] = "weak"
+            else:
+                row["survival_status"] = "active"
+            row["survival_health"] = round(h, 4)
+
         # Diversity signal on top cohort.
         top_rows = self._strategies[:top_n]
         overall_unique = len({str(r.get("family", "")) for r in self._strategies})

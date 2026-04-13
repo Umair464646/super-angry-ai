@@ -23,7 +23,7 @@ Rectangle {
             Label { text: row.id + " · " + row.name; color: "#E3EEFF"; font.bold: true; Layout.fillWidth: true; elide: Text.ElideRight }
             Label { text: "#" + (row.rank || "-"); color: row.rank <= 3 ? "#FFD27A" : "#8FCBFF"; font.pixelSize: 11; font.bold: row.rank <= 3 }
             Label { text: "Score " + (row.score || 0); color: "#CBE5FF"; font.pixelSize: 11; font.bold: true }
-            Label { text: row.status; color: "#8FCBFF"; font.pixelSize: 11 }
+            Label { text: (row.status || "") + " · " + (row.survival_status || "active"); color: "#8FCBFF"; font.pixelSize: 11 }
         }
         Label { text: row.family + " | G" + row.generation + " | " + row.origin; color: "#9FB5D7"; font.pixelSize: 12 }
         Label { text: "Regime: " + (row.regime || "trend-following"); color: "#F5CF88"; font.pixelSize: 11 }
