@@ -10,6 +10,10 @@ from dataclasses import asdict
 
 import pandas as pd
 import numpy as np
+try:
+    import psutil
+except ImportError:
+    psutil = None
 from PySide6.QtCore import QObject, Property, QThread, Signal, Slot, QUrl
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtQml import QQmlApplicationEngine
@@ -29,6 +33,13 @@ class ResourceController:
         self.stage_cb = stage_cb
         self._last_log_ts = 0.0
         self._last_stage_ts = 0.0
+        self._last_ram_state = ""
+        self._psutil_warning_emitted = False
+        self._psutil_error_emitted = False
+        try:
+            self._process = psutil.Process() if psutil is not None else None
+        except Exception:
+            self._process = None
 
     def update(self, ram_limit_gb: float, cpu_throttle: int):
         self.ram_limit_gb = max(0.25, float(ram_limit_gb))
@@ -36,13 +47,23 @@ class ResourceController:
 
     def memory_usage_gb(self) -> float:
         try:
-            with open("/proc/self/status", "r", encoding="utf-8") as fh:
-                for line in fh:
-                    if line.startswith("VmRSS:"):
-                        kb = float(line.split()[1])
-                        return kb / (1024.0 * 1024.0)
+            if self._process is None:
+                if self.log_cb is not None and not self._psutil_warning_emitted:
+                    self.log_cb(
+                        "WARN",
+                        "RAM limiter warning: psutil is not available; memory usage fallback is 0.00GB until psutil is installed.",
+                    )
+                    self._psutil_warning_emitted = True
+                return 0.0
+            rss_bytes = float(self._process.memory_info().rss)
+            return rss_bytes / (1024.0 ** 3)
         except Exception:
-            pass
+            if self.log_cb is not None and not self._psutil_error_emitted:
+                self.log_cb(
+                    "WARN",
+                    "RAM limiter warning: failed to read process RSS via psutil; memory usage fallback is 0.00GB.",
+                )
+                self._psutil_error_emitted = True
         return 0.0
 
     def cooperative_yield(self, stage: str, current: int, total: int, detail: str = ""):
@@ -56,17 +77,19 @@ class ResourceController:
         high_watermark = self.ram_limit_gb * 0.90
         over_limit = mem_gb >= self.ram_limit_gb
         near_limit = mem_gb >= high_watermark
+        limiter_state = "LIMIT EXCEEDED" if over_limit else "NEAR LIMIT" if near_limit else "NORMAL"
+        now = time.time()
+        if self.log_cb is not None and (limiter_state != self._last_ram_state or now - self._last_log_ts > 1.0):
+            level = "WARN" if near_limit else "INFO"
+            self.log_cb(
+                level,
+                f"RAM limiter state={limiter_state} usage={mem_gb:.2f}GB limit={self.ram_limit_gb:.2f}GB stage={stage}",
+            )
+            self._last_log_ts = now
+            self._last_ram_state = limiter_state
         if near_limit:
             extra_delay = 0.020 if over_limit else 0.010
             time.sleep(extra_delay)
-            now = time.time()
-            if self.log_cb is not None and now - self._last_log_ts > 1.0:
-                status = "exceeded" if over_limit else "near"
-                self.log_cb(
-                    "WARN",
-                    f"RAM limiter active ({status} limit): usage={mem_gb:.2f}GB limit={self.ram_limit_gb:.2f}GB stage={stage}",
-                )
-                self._last_log_ts = now
 
         now = time.time()
         if self.stage_cb is not None and (current <= 1 or current >= total or now - self._last_stage_ts > 0.35):
