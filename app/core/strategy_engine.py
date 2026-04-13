@@ -403,7 +403,7 @@ def _robustness_score(train_metrics: dict, test_metrics: dict) -> float:
 
 
 def _performance_context_analysis(test_df: pd.DataFrame, trades_df: pd.DataFrame) -> dict[str, Any]:
-    if test_df is None or test_df.empty or trades_df is None or trades_df.empty:
+    def _empty() -> dict[str, Any]:
         return {
             "high_vol_avg_return": 0.0,
             "low_vol_avg_return": 0.0,
@@ -412,8 +412,43 @@ def _performance_context_analysis(test_df: pd.DataFrame, trades_df: pd.DataFrame
             "trend_confidence": 0.0,
             "volatility_confidence": 0.0,
             "context_confidence": 0.0,
+            "time_stability": 0.0,
+            "decay_score": 0.0,
+            "decay_flag": False,
+            "sample_count": 0,
             "performance_context": "Insufficient trades for context analysis",
         }
+
+    def _condition_confidence(a: pd.Series, b: pd.Series) -> float:
+        a = pd.to_numeric(a, errors="coerce").dropna()
+        b = pd.to_numeric(b, errors="coerce").dropna()
+        n1, n2 = len(a), len(b)
+        if n1 < 2 or n2 < 2:
+            return 0.0
+        total = n1 + n2
+        p = n1 / total
+        coverage = 4.0 * p * (1.0 - p)  # 0..1, max at balanced samples
+        m1, m2 = float(a.mean()), float(b.mean())
+        v1, v2 = float(a.var(ddof=1)), float(b.var(ddof=1))
+        pooled = ((n1 - 1) * v1 + (n2 - 1) * v2) / max(1, (n1 + n2 - 2))
+        pooled_std = float(np.sqrt(max(pooled, 1e-12)))
+        effect = abs(m1 - m2) / pooled_std
+        magnitude = effect / (1.0 + effect)
+        n_eff = (n1 * n2) / max(1.0, (n1 + n2))
+        strength = 1.0 - float(np.exp(-np.sqrt(max(n_eff, 0.0)) * effect))
+        return float(max(0.0, min(1.0, coverage * magnitude * strength)))
+
+    def _consistency_score(values: list[float]) -> float:
+        arr = np.asarray(values, dtype=float)
+        if len(arr) <= 1:
+            return 0.0
+        mean_abs = float(np.mean(np.abs(arr)))
+        sd = float(np.std(arr, ddof=0))
+        cv = sd / (mean_abs + 1e-9)
+        return float(1.0 / (1.0 + cv))
+
+    if test_df is None or test_df.empty or trades_df is None or trades_df.empty:
+        return _empty()
 
     local = test_df.copy()
     local["timestamp"] = pd.to_datetime(local["timestamp"], utc=True, errors="coerce")
@@ -431,16 +466,7 @@ def _performance_context_analysis(test_df: pd.DataFrame, trades_df: pd.DataFrame
     trades["entry_time"] = pd.to_datetime(trades["entry_time"], utc=True, errors="coerce")
     trades = trades.dropna(subset=["entry_time"]).sort_values("entry_time").reset_index(drop=True)
     if trades.empty:
-        return {
-            "high_vol_avg_return": 0.0,
-            "low_vol_avg_return": 0.0,
-            "trending_avg_return": 0.0,
-            "ranging_avg_return": 0.0,
-            "trend_confidence": 0.0,
-            "volatility_confidence": 0.0,
-            "context_confidence": 0.0,
-            "performance_context": "Insufficient trades for context analysis",
-        }
+        return _empty()
 
     tagged = pd.merge_asof(
         trades,
@@ -461,27 +487,65 @@ def _performance_context_analysis(test_df: pd.DataFrame, trades_df: pd.DataFrame
     n_low = int((~tagged["high_vol"]).sum())
     n_tr = int(tagged["trending"].sum())
     n_rg = int((~tagged["trending"]).sum())
+    trend_conf = _condition_confidence(
+        tagged.loc[tagged["trending"], "return_pct"],
+        tagged.loc[~tagged["trending"], "return_pct"],
+    )
+    vol_conf = _condition_confidence(
+        tagged.loc[tagged["high_vol"], "return_pct"],
+        tagged.loc[~tagged["high_vol"], "return_pct"],
+    )
+    context_conf = float(np.sqrt(max(0.0, trend_conf * vol_conf)))
+    return_scale = float(np.std(tagged["return_pct"], ddof=0))
 
-    trend_diff = abs(tr - rg)
-    vol_diff = abs(hv - lv)
-    trend_size_factor = min(1.0, min(n_tr, n_rg) / 10.0) if (n_tr > 0 and n_rg > 0) else 0.0
-    vol_size_factor = min(1.0, min(n_high, n_low) / 10.0) if (n_high > 0 and n_low > 0) else 0.0
-    trend_mag_factor = min(1.0, trend_diff / 0.25)
-    vol_mag_factor = min(1.0, vol_diff / 0.25)
-    trend_conf = trend_size_factor * trend_mag_factor
-    vol_conf = vol_size_factor * vol_mag_factor
-    context_conf = (trend_conf + vol_conf) / 2.0
+    # Time-segment stability and decay (2-4 adaptive segments).
+    seg_count = int(min(4, max(2, np.sqrt(max(4, len(local))) // 20 + 2)))
+    ts = local["timestamp"]
+    edges = pd.date_range(start=ts.iloc[0], end=ts.iloc[-1], periods=seg_count + 1)
+    pnl_seg: list[float] = []
+    win_seg: list[float] = []
+    dd_seg: list[float] = []
+    for i in range(seg_count):
+        s, e = edges[i], edges[i + 1]
+        m = (trades["entry_time"] >= s) & (trades["entry_time"] < e if i < seg_count - 1 else trades["entry_time"] <= e)
+        seg = trades.loc[m]
+        if seg.empty:
+            pnl_seg.append(0.0)
+            win_seg.append(0.0)
+            dd_seg.append(0.0)
+            continue
+        net = pd.to_numeric(seg["net_pnl"], errors="coerce").fillna(0.0)
+        cum = net.cumsum()
+        run_max = cum.cummax()
+        dd = ((cum - run_max).min()) if len(cum) else 0.0
+        pnl_seg.append(float(net.sum()))
+        win_seg.append(float((net > 0).mean() * 100.0))
+        dd_seg.append(abs(float(dd)))
 
-    if tr - rg > 0.08:
+    pnl_consistency = _consistency_score(pnl_seg)
+    win_consistency = _consistency_score(win_seg)
+    dd_consistency = _consistency_score(dd_seg)
+    time_stability = float((pnl_consistency + win_consistency + dd_consistency) / 3.0)
+
+    half = max(1, seg_count // 2)
+    early = float(np.mean(pnl_seg[:half])) if pnl_seg else 0.0
+    late = float(np.mean(pnl_seg[half:])) if pnl_seg else 0.0
+    decay_raw = max(0.0, early - late)
+    decay_scale = float(np.std(pnl_seg, ddof=0) + abs(np.mean(pnl_seg)) + 1e-9)
+    decay_score = float(decay_raw / (decay_raw + decay_scale))
+    decay_flag = bool(late < early and decay_score > (1.0 - time_stability))
+
+    adaptive_gap = return_scale / np.sqrt(max(1.0, float(len(tagged))))
+    if tr - rg > adaptive_gap:
         base = "Performs best in trending markets"
-    elif rg - tr > 0.08:
+    elif rg - tr > adaptive_gap:
         base = "Performs best in ranging markets"
     else:
         base = "Balanced between trending and ranging periods"
 
-    if hv - lv > 0.05:
+    if hv - lv > adaptive_gap:
         vol_note = "Sensitive to high volatility"
-    elif lv - hv > 0.05:
+    elif lv - hv > adaptive_gap:
         vol_note = "Stable in low-volatility conditions"
     else:
         vol_note = "Volatility sensitivity is moderate"
@@ -494,6 +558,11 @@ def _performance_context_analysis(test_df: pd.DataFrame, trades_df: pd.DataFrame
         "trend_confidence": round(trend_conf, 4),
         "volatility_confidence": round(vol_conf, 4),
         "context_confidence": round(context_conf, 4),
+        "time_stability": round(time_stability, 4),
+        "decay_score": round(decay_score, 4),
+        "decay_flag": decay_flag,
+        "sample_count": int(len(tagged)),
+        "return_scale": round(return_scale, 6),
         "performance_context": f"{base}; {vol_note}",
     }
 
@@ -836,12 +905,16 @@ def evolve_templates(
             max_loss_pct = float(test_trades["return_pct"].min()) if not test_trades.empty else 0.0
             wins = int((test_trades["net_pnl"] > 0).sum()) if not test_trades.empty else 0
             losses = int((test_trades["net_pnl"] < 0).sum()) if not test_trades.empty else 0
-            trend_diff = abs(float(perf_context.get("trending_avg_return", 0.0)) - float(perf_context.get("ranging_avg_return", 0.0)))
-            vol_diff = abs(float(perf_context.get("high_vol_avg_return", 0.0)) - float(perf_context.get("low_vol_avg_return", 0.0)))
-            consistency = max(0.0, 1.0 - min(1.0, (trend_diff + vol_diff) / 0.8))
-            trade_stability = min(1.0, int(test["total_trades"]) / 40.0)
-            dd_stability = max(0.0, 1.0 - min(1.0, abs(float(test["max_drawdown_pct"])) / 35.0))
-            behavior_robustness = round((trade_stability * 0.45 + consistency * 0.35 + dd_stability * 0.20) * 100.0, 2)
+            trade_returns = pd.to_numeric(test_trades["return_pct"], errors="coerce").dropna() if not test_trades.empty else pd.Series(dtype=float)
+            n_trades = max(1, int(test["total_trades"]))
+            trade_stability = float(1.0 - np.exp(-np.sqrt(float(n_trades))))
+            ret_mean = float(trade_returns.mean()) if not trade_returns.empty else 0.0
+            ret_std = float(trade_returns.std(ddof=0)) if not trade_returns.empty else 0.0
+            return_consistency = float(1.0 / (1.0 + (ret_std / (abs(ret_mean) + 1e-9))))
+            dd_scale = abs(ret_mean) + ret_std + 1e-9
+            dd_stability = float(1.0 / (1.0 + abs(float(test["max_drawdown_pct"])) / (dd_scale * 100.0 + 1e-9)))
+            time_stability = float(perf_context.get("time_stability", 0.0))
+            behavior_robustness = round((trade_stability + return_consistency + dd_stability + time_stability) / 4.0 * 100.0, 2)
             complexity_score = float(len(t.indicators)) * 1.8 + float(len(params)) * 0.35
             row = {
                 "strategy": t.name,
@@ -868,6 +941,11 @@ def evolve_templates(
                 "ctx_trend_confidence": float(perf_context.get("trend_confidence", 0.0)),
                 "ctx_volatility_confidence": float(perf_context.get("volatility_confidence", 0.0)),
                 "ctx_confidence": float(perf_context.get("context_confidence", 0.0)),
+                "ctx_time_stability": float(perf_context.get("time_stability", 0.0)),
+                "ctx_decay_score": float(perf_context.get("decay_score", 0.0)),
+                "ctx_decay_flag": bool(perf_context.get("decay_flag", False)),
+                "ctx_sample_count": int(perf_context.get("sample_count", 0)),
+                "ctx_return_scale": float(perf_context.get("return_scale", 0.0)),
                 "performance_context": str(perf_context.get("performance_context", "")),
                 "behavior_robustness": behavior_robustness,
             }

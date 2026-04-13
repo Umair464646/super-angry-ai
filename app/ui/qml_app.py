@@ -8,6 +8,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 import pandas as pd
+import numpy as np
 from PySide6.QtCore import QObject, Property, QThread, Signal, Slot, QUrl
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtQml import QQmlApplicationEngine
@@ -54,6 +55,8 @@ class ResearchWorker(QObject):
         observed_lv = float((context or {}).get("ctx_low_vol_avg_return", 0.0) or 0.0)
         trend_conf = float((context or {}).get("ctx_trend_confidence", 0.0) or 0.0)
         vol_conf = float((context or {}).get("ctx_volatility_confidence", 0.0) or 0.0)
+        sample_count = max(1.0, float((context or {}).get("ctx_sample_count", 0.0) or 1.0))
+        return_scale = max(1e-9, float((context or {}).get("ctx_return_scale", 0.0) or 1e-9))
 
         template_regime = "trend-following"
         if "breakout" in key or "breakout" in inds or "donchian" in inds:
@@ -61,13 +64,15 @@ class ResearchWorker(QObject):
         elif "reversal" in key or "mean" in key or "rsi" in inds or "zscore" in inds:
             template_regime = "mean-reversion"
 
-        if max(trend_conf, vol_conf) < 0.22:
+        min_required_conf = 1.0 / (1.0 + np.sqrt(sample_count))
+        adaptive_gap = return_scale / np.sqrt(sample_count)
+        if max(trend_conf, vol_conf) < min_required_conf:
             return "uncertain"
-        if observed_tr - observed_rg > 0.08:
+        if observed_tr - observed_rg > adaptive_gap:
             return "trend-following"
-        if observed_rg - observed_tr > 0.08:
+        if observed_rg - observed_tr > adaptive_gap:
             return "mean-reversion"
-        if observed_hv - observed_lv > 0.06 and template_regime in {"breakout", "trend-following"}:
+        if observed_hv - observed_lv > adaptive_gap and template_regime in {"breakout", "trend-following"}:
             return "breakout"
         return template_regime
 
@@ -156,6 +161,8 @@ class ResearchWorker(QObject):
                         "ctx_ranging_avg_return": row.get("ctx_ranging_avg_return", 0.0),
                         "ctx_trend_confidence": row.get("ctx_trend_confidence", 0.0),
                         "ctx_volatility_confidence": row.get("ctx_volatility_confidence", 0.0),
+                        "ctx_sample_count": row.get("ctx_sample_count", 0),
+                        "ctx_return_scale": row.get("ctx_return_scale", 0.0),
                     }
                     explanation = self._strategy_explanation(
                         str(row.get("template_key", "")),
@@ -196,6 +203,10 @@ class ResearchWorker(QObject):
                         "trend_context_confidence": round(float(row.get("ctx_trend_confidence", 0.0)), 4),
                         "volatility_context_confidence": round(float(row.get("ctx_volatility_confidence", 0.0)), 4),
                         "behavior_robustness": round(float(row.get("behavior_robustness", 0.0)), 2),
+                        "time_stability": round(float(row.get("ctx_time_stability", 0.0)), 4),
+                        "decay_score": round(float(row.get("ctx_decay_score", 0.0)), 4),
+                        "decay_flag": bool(row.get("ctx_decay_flag", False)),
+                        "ctx_return_scale": round(float(row.get("ctx_return_scale", 0.0)), 6),
                     }
                     self.strategy.emit(payload)
                     self.log.emit(
@@ -232,6 +243,8 @@ class ResearchWorker(QObject):
                         "ctx_ranging_avg_return": row.get("ctx_ranging_avg_return", 0.0),
                         "ctx_trend_confidence": row.get("ctx_trend_confidence", 0.0),
                         "ctx_volatility_confidence": row.get("ctx_volatility_confidence", 0.0),
+                        "ctx_sample_count": row.get("ctx_sample_count", 0),
+                        "ctx_return_scale": row.get("ctx_return_scale", 0.0),
                     }
                     explanation = self._strategy_explanation(str(row["template_key"]), params, context=context)
                     key_sig = (str(row["template_key"]), str(sorted(params.items())))
@@ -270,6 +283,10 @@ class ResearchWorker(QObject):
                         "trend_context_confidence": round(float(row.get("ctx_trend_confidence", 0.0)), 4),
                         "volatility_context_confidence": round(float(row.get("ctx_volatility_confidence", 0.0)), 4),
                         "behavior_robustness": round(float(row.get("behavior_robustness", 0.0)), 2),
+                        "time_stability": round(float(row.get("ctx_time_stability", 0.0)), 4),
+                        "decay_score": round(float(row.get("ctx_decay_score", 0.0)), 4),
+                        "decay_flag": bool(row.get("ctx_decay_flag", False)),
+                        "ctx_return_scale": round(float(row.get("ctx_return_scale", 0.0)), 6),
                     }
                     self.strategy.emit(payload)
 
@@ -297,6 +314,8 @@ class ResearchWorker(QObject):
                     "ctx_ranging_avg_return": vrow.get("ctx_ranging_avg_return", 0.0),
                     "ctx_trend_confidence": vrow.get("ctx_trend_confidence", 0.0),
                     "ctx_volatility_confidence": vrow.get("ctx_volatility_confidence", 0.0),
+                    "ctx_sample_count": vrow.get("ctx_sample_count", 0),
+                    "ctx_return_scale": vrow.get("ctx_return_scale", 0.0),
                 }
                 explanation = self._strategy_explanation(str(vrow["template_key"]), params, context=context)
                 self.log.emit("INFO", f"validation running [{v_idx}/{len(validation_targets)}] {vrow['template_key']} params={params}")
@@ -342,6 +361,10 @@ class ResearchWorker(QObject):
                     "trend_context_confidence": round(float(vrow.get("ctx_trend_confidence", 0.0)), 4),
                     "volatility_context_confidence": round(float(vrow.get("ctx_volatility_confidence", 0.0)), 4),
                     "behavior_robustness": round(float(vrow.get("behavior_robustness", 0.0)), 2),
+                    "time_stability": round(float(vrow.get("ctx_time_stability", 0.0)), 4),
+                    "decay_score": round(float(vrow.get("ctx_decay_score", 0.0)), 4),
+                    "decay_flag": bool(vrow.get("ctx_decay_flag", False)),
+                    "ctx_return_scale": round(float(vrow.get("ctx_return_scale", 0.0)), 6),
                 })
                 self.log.emit("INFO", f"validation completed [{v_idx}/{len(validation_targets)}] stability={float(v_stability):.2f}")
                 if v_idx == 1:
